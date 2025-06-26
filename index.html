@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Trading Bot Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .header h1 {
+            color: #00ff88;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .control-group {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .control-group h3 {
+            color: #00ff88;
+            margin-bottom: 10px;
+        }
+
+        select, input, button {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+
+        button {
+            background: linear-gradient(45deg, #00ff88, #00cc6a);
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: linear-gradient(45deg, #00cc6a, #009955);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 255, 136, 0.3);
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .chart-container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            height: 400px;
+        }
+
+        .signal-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .signal-card {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 4px solid #00ff88;
+        }
+
+        .signal-buy {
+            border-left-color: #00ff88;
+            background: rgba(0, 255, 136, 0.1);
+        }
+
+        .signal-sell {
+            border-left-color: #ff4444;
+            background: rgba(255, 68, 68, 0.1);
+        }
+
+        .signal-hold {
+            border-left-color: #ffaa00;
+            background: rgba(255, 170, 0, 0.1);
+        }
+
+        .timeframe-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .timeframe-item {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            padding: 10px;
+            text-align: center;
+            font-size: 12px;
+        }
+
+        .bullish { background: rgba(0, 255, 136, 0.2); }
+        .bearish { background: rgba(255, 68, 68, 0.2); }
+        .neutral { background: rgba(255, 170, 0, 0.2); }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .metric-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #00ff88;
+        }
+
+        .status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff88;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0, 255, 136, 0.3);
+            border-radius: 50%;
+            border-top-color: #00ff88;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            .controls {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="status" id="status">System Ready</div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Advanced Trading Bot</h1>
+            <p>Wavelet + Kalman + Bayesian Multi-Timeframe Analysis</p>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <h3>Asset Selection</h3>
+                <select id="symbolSelect">
+                    <optgroup label="Major Forex">
+                        <option value="EUR/USD">EUR/USD</option>
+                        <option value="GBP/USD">GBP/USD</option>
+                        <option value="USD/JPY">USD/JPY</option>
+                        <option value="USD/CHF">USD/CHF</option>
+                        <option value="AUD/USD">AUD/USD</option>
+                        <option value="USD/CAD">USD/CAD</option>
+                        <option value="NZD/USD">NZD/USD</option>
+                    </optgroup>
+                    <optgroup label="Exotic Forex">
+                        <option value="USD/TRY">USD/TRY</option>
+                        <option value="USD/SEK">USD/SEK</option>
+                        <option value="USD/NOK">USD/NOK</option>
+                        <option value="USD/ZAR">USD/ZAR</option>
+                        <option value="EUR/TRY">EUR/TRY</option>
+                        <option value="GBP/TRY">GBP/TRY</option>
+                    </optgroup>
+                    <optgroup label="Precious Metals">
+                        <option value="XAU/USD">Gold (XAU/USD)</option>
+                        <option value="XAG/USD">Silver (XAG/USD)</option>
+                        <option value="XPT/USD">Platinum (XPT/USD)</option>
+                        <option value="XPD/USD">Palladium (XPD/USD)</option>
+                    </optgroup>
+                    <optgroup label="Cryptocurrencies">
+                        <option value="BTC/USD">Bitcoin (BTC/USD)</option>
+                        <option value="ETH/USD">Ethereum (ETH/USD)</option>
+                        <option value="BNB/USD">Binance Coin (BNB/USD)</option>
+                        <option value="SOL/USD">Solana (SOL/USD)</option>
+                        <option value="ADA/USD">Cardano (ADA/USD)</option>
+                        <option value="XRP/USD">Ripple (XRP/USD)</option>
+                    </optgroup>
+                    <optgroup label="Major Stocks">
+                        <option value="AAPL">Apple (AAPL)</option>
+                        <option value="MSFT">Microsoft (MSFT)</option>
+                        <option value="GOOGL">Google (GOOGL)</option>
+                        <option value="AMZN">Amazon (AMZN)</option>
+                        <option value="TSLA">Tesla (TSLA)</option>
+                        <option value="NVDA">Nvidia (NVDA)</option>
+                        <option value="META">Meta (META)</option>
+                    </optgroup>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <h3>Timeframe</h3>
+                <select id="timeframeSelect">
+                    <option value="30min">30 Minutes</option>
+                    <option value="1hr" selected>1 Hour</option>
+                    <option value="4hr">4 Hours</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <h3>Analysis Parameters</h3>
+                <label>Risk Tolerance:</label>
+                <input type="range" id="riskTolerance" min="0.01" max="0.1" step="0.01" value="0.02">
+                <span id="riskValue">2%</span>
+                
+                <label>Wavelet Type:</label>
+                <select id="waveletType">
+                    <option value="db4" selected>Daubechies 4</option>
+                    <option value="db8">Daubechies 8</option>
+                    <option value="haar">Haar</option>
+                    <option value="coif2">Coiflets 2</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <h3>Actions</h3>
+                <button onclick="analyzeSymbol()">🔍 Analyze Signal</button>
+                <button onclick="startAutoUpdate()">🔄 Auto Update</button>
+                <button onclick="stopAutoUpdate()">⏹️ Stop Updates</button>
+            </div>
+        </div>
+
+        <div class="metrics">
+            <div class="metric-card">
+                <div>Current Price</div>
+                <div class="metric-value" id="currentPrice">-</div>
+            </div>
+            <div class="metric-card">
+                <div>24h Change</div>
+                <div class="metric-value" id="priceChange">-</div>
+            </div>
+            <div class="metric-card">
+                <div>Volatility</div>
+                <div class="metric-value" id="volatility">-</div>
+            </div>
+            <div class="metric-card">
+                <div>Volume</div>
+                <div class="metric-value" id="volume">-</div>
+            </div>
+        </div>
+
+        <div class="dashboard">
+            <div class="chart-container">
+                <canvas id="priceChart"></canvas>
+            </div>
+            <div class="signal-panel">
+                <h3>🎯 Trading Signals</h3>
+                <div id="signalContainer">
+                    <div class="signal-card">
+                        <h4>Waiting for Analysis...</h4>
+                        <p>Select a symbol and click "Analyze Signal" to get started.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Advanced Trading System Implementation
+        class WaveletTransform {
+            constructor(waveletType = 'db4') {
+                this.waveletType = waveletType;
+                this.timeframes = ['1min', '5min', '15min', '1hr', '4hr', 'daily'];
+            }
+
+            // Simplified wavelet decomposition using DWT-like approach
+            decompose(priceData, levels = 6) {
+                try {
+                    const components = {};
+                    let data = [...priceData];
+                    
+                    // Apply successive low-pass and high-pass filtering
+                    for (let i = 0; i < this.timeframes.length && i < levels; i++) {
+                        const filtered = this.applyFilter(data, i);
+                        components[this.timeframes[i]] = filtered;
+                        data = this.downsample(data, 2);
+                    }
+                    
+                    // Add trend component
+                    components['trend'] = this.movingAverage(priceData, 20);
+                    
+                    return components;
+                } catch (e) {
+                    console.error('Wavelet decomposition error:', e);
+                    return {};
+                }
+            }
+
+            applyFilter(data, level) {
+                // Simple filter approximation
+                const alpha = 0.3 / (level + 1);
+                const filtered = [];
+                filtered[0] = data[0];
+                
+                for (let i = 1; i < data.length; i++) {
+                    filtered[i] = alpha * data[i] + (1 - alpha) * filtered[i - 1];
+                }
+                
+                return filtered;
+            }
+
+            downsample(data, factor) {
+                return data.filter((_, index) => index % factor === 0);
+            }
+
+            movingAverage(data, window) {
+                const result = [];
+                for (let i = 0; i < data.length; i++) {
+                    const start = Math.max(0, i - window + 1);
+                    const values = data.slice(start, i + 1);
+                    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                    result.push(avg);
+                }
+                return result;
+            }
+        }
+
+        class KalmanFilter {
+            constructor(processNoise = 1e-5, measurementNoise = 1e-1) {
+                this.processNoise = processNoise;
+                this.measurementNoise = measurementNoise;
+                this.reset();
+            }
+
+            reset() {
+                this.state = [0, 0, 0]; // [price, velocity, acceleration]
+                this.covariance = [[1000, 0, 0], [0, 1000, 0], [0, 0, 1000]];
+            }
+
+            update(measurement) {
+                // Simplified Kalman filter implementation
+                const predicted = this.state[0] + this.state[1] + 0.5 * this.state[2];
+                const innovation = measurement - predicted;
+                
+                // Update state
+                const gain = this.covariance[0][0] / (this.covariance[0][0] + this.measurementNoise);
+                this.state[0] = predicted + gain * innovation;
+                this.state[1] = this.state[1] + this.state[2];
+                this.state[2] = this.state[2] * 0.95; // Decay acceleration
+                
+                // Update covariance (simplified)
+                this.covariance[0][0] = (1 - gain) * this.covariance[0][0] + this.processNoise;
+                
+                return {
+                    price: this.state[0],
+                    velocity: this.state[1],
+                    acceleration: this.state[2],
+                    volatility: Math.sqrt(this.covariance[0][0])
+                };
+            }
+
+            processTimeframe(priceSeries) {
+                this.reset();
+                let result = { price: 0, velocity: 0, acceleration: 0, volatility: 0 };
+                
+                for (const price of priceSeries) {
+                    if (!isNaN(price) && isFinite(price)) {
+                        result = this.update(price);
+                    }
+                }
+                
+                return result;
+            }
+        }
+
+        class BayesianInference {
+            constructor(riskTolerance = 0.02) {
+                this.riskTolerance = riskTolerance;
+                this.priorBull = 0.5;
+            }
+
+            calculateSignalProbability(kalmanStates) {
+                const signals = {};
+                
+                for (const [timeframe, state] of Object.entries(kalmanStates)) {
+                    if (timeframe === 'trend') continue;
+                    
+                    const velocity = state.velocity || 0;
+                    const acceleration = state.acceleration || 0;
+                    const volatility = Math.max(state.volatility || 0.01, 0.01);
+                    
+                    const momentumScore = velocity / volatility;
+                    const accelerationScore = acceleration / volatility;
+                    
+                    // Calculate probabilities using normal distribution
+                    const combinedScore = momentumScore + accelerationScore;
+                    const likelihoodBull = 0.5 + 0.5 * Math.tanh(combinedScore);
+                    
+                    signals[timeframe] = {
+                        bull_prob: likelihoodBull,
+                        bear_prob: 1 - likelihoodBull,
+                        momentum: momentumScore,
+                        strength: Math.abs(momentumScore)
+                    };
+                }
+                
+                return signals;
+            }
+
+            generateTradingSignal(kalmanStates, currentPrice) {
+                const signalProbs = this.calculateSignalProbability(kalmanStates);
+                const weights = { '1min': 0.1, '5min': 0.15, '15min': 0.2, '1hr': 0.25, '4hr': 0.3 };
+                
+                let weightedBullProb = 0;
+                let weightedBearProb = 0;
+                const timeframeAlignment = {};
+                
+                for (const [timeframe, probData] of Object.entries(signalProbs)) {
+                    if (weights[timeframe]) {
+                        const weight = weights[timeframe];
+                        weightedBullProb += probData.bull_prob * weight;
+                        weightedBearProb += probData.bear_prob * weight;
+                        
+                        if (probData.bull_prob > 0.6) {
+                            timeframeAlignment[timeframe] = 'BULLISH';
+                        } else if (probData.bear_prob > 0.6) {
+                            timeframeAlignment[timeframe] = 'BEARISH';
+                        } else {
+                            timeframeAlignment[timeframe] = 'NEUTRAL';
+                        }
+                    }
+                }
+                
+                const confidence = Math.max(weightedBullProb, weightedBearProb) * 100;
+                let signal = 'HOLD';
+                
+                if (weightedBullProb > 0.65) {
+                    signal = 'BUY';
+                } else if (weightedBearProb > 0.65) {
+                    signal = 'SELL';
+                }
+                
+                // Calculate TP/SL levels
+                const avgVolatility = Object.values(kalmanStates)
+                    .filter(s => s.volatility)
+                    .reduce((acc, s) => acc + s.volatility, 0) / Object.keys(kalmanStates).length || 0.01;
+                
+                let tpLevels, slLevel;
+                
+                if (signal === 'BUY') {
+                    tpLevels = [
+                        currentPrice + avgVolatility * 1.5,
+                        currentPrice + avgVolatility * 2.5,
+                        currentPrice + avgVolatility * 4.0
+                    ];
+                    slLevel = currentPrice - avgVolatility * 2.0;
+                } else if (signal === 'SELL') {
+                    tpLevels = [
+                        currentPrice - avgVolatility * 1.5,
+                        currentPrice - avgVolatility * 2.5,
+                        currentPrice - avgVolatility * 4.0
+                    ];
+                    slLevel = currentPrice + avgVolatility * 2.0;
+                } else {
+                    tpLevels = [currentPrice];
+                    slLevel = currentPrice;
+                }
+                
+                const positionSize = Math.min(confidence / 100 * this.riskTolerance, this.riskTolerance);
+                
+                return {
+                    signal,
+                    confidence,
+                    entry_price: currentPrice,
+                    tp_levels: tpLevels,
+                    sl_level: slLevel,
+                    position_size: positionSize,
+                    timeframe_alignment: timeframeAlignment
+                };
+            }
+        }
+
+        class AdvancedTradingSystem {
+            constructor(waveletType = 'db4', processNoise = 1e-5, measurementNoise = 1e-1, riskTolerance = 0.02) {
+                this.wavelet = new WaveletTransform(waveletType);
+                this.kalmanFilters = {};
+                this.wavelet.timeframes.forEach(tf => {
+                    this.kalmanFilters[tf] = new KalmanFilter(processNoise, measurementNoise);
+                });
+                this.bayesian = new BayesianInference(riskTolerance);
+            }
+
+            analyze(priceData) {
+                if (priceData.length < 50) {
+                    throw new Error("Need at least 50 data points for analysis");
+                }
+                
+                // Step 1: Wavelet decomposition
+                const waveletComponents = this.wavelet.decompose(priceData);
+                
+                if (Object.keys(waveletComponents).length === 0) {
+                    throw new Error("Wavelet decomposition failed");
+                }
+                
+                // Step 2: Kalman filtering
+                const kalmanStates = {};
+                for (const timeframe of this.wavelet.timeframes) {
+                    if (waveletComponents[timeframe]) {
+                        let componentData = waveletComponents[timeframe];
+                        if (componentData.length >= priceData.length) {
+                            componentData = componentData.slice(0, priceData.length);
+                        }
+                        kalmanStates[timeframe] = this.kalmanFilters[timeframe].processTimeframe(componentData);
+                    }
+                }
+                
+                // Step 3: Generate signal
+                const currentPrice = priceData[priceData.length - 1];
+                return this.bayesian.generateTradingSignal(kalmanStates, currentPrice);
+            }
+        }
+
+        // Global variables
+        let tradingSystem = new AdvancedTradingSystem();
+        let priceChart;
+        let autoUpdateInterval;
+        let currentData = [];
+
+        // Initialize chart
+        function initializeChart() {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            priceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Price',
+                        data: [],
+                        borderColor: '#00ff88',
+                        backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: { color: '#e0e0e0' }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { color: '#e0e0e0' },
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                        },
+                        y: {
+                            ticks: { color: '#e0e0e0' },
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Generate sample data (simulating live data)
+        function generateSampleData(symbol, timeframe, points = 100) {
+            const data = [];
+            const labels = [];
+            let basePrice = 1.2000; // Default for EUR/USD
+            
+            // Adjust base price for different symbols
+            if (symbol.includes('JPY')) basePrice = 110.0;
+            else if (symbol.includes('XAU')) basePrice = 2000.0;
+            else if (symbol.includes('BTC')) basePrice = 45000.0;
+            else if (['AAPL', 'MSFT', 'GOOGL'].includes(symbol)) basePrice = 150.0;
+            
+            for (let i = 0; i < points; i++) {
+                const trend = basePrice * (1 + 0.001 * Math.sin(i * 0.1));
+                const noise = (Math.random() - 0.5) * basePrice * 0.02;
+                const price = trend + noise;
+                
+                data.push(price);
+                labels.push(`T-${points - i}`);
+            }
+            
+            return { data, labels };
+        }
+
+        // Analyze symbol
+        async function analyzeSymbol() {
+            const symbol = document.getElementById('symbolSelect').value;
+            const timeframe = document.getElementById('timeframeSelect').value;
+            const riskTolerance = parseFloat(document.getElementById('riskTolerance').value);
+            const waveletType = document.getElementById('waveletType').value;
+            
+            updateStatus('Analyzing ' + symbol + '...');
+            
+            try {
+                // Update system parameters
+                tradingSystem = new AdvancedTradingSystem(waveletType, 1e-5, 1e-1, riskTolerance);
+                
+                // Generate sample data (in real app, this would fetch from API)
+                const { data, labels } = generateSampleData(symbol, timeframe, 200);
+                currentData = data;
+                
+                // Update chart
+                priceChart.data.labels = labels.slice(-50);
+                priceChart.data.datasets[0].data = data.slice(-50);
+                priceChart.data.datasets[0].label = symbol;
+                priceChart.update();
+                
+                // Analyze
+                const signal = tradingSystem.analyze(data);
+                
+                // Update UI
+                updateMetrics(data, signal);
+                displaySignal(signal, symbol);
+                updateStatus('Analysis Complete');
+                
+            } catch (error) {
+                console.error('Analysis error:', error);
+                updateStatus('Analysis Failed: ' + error.message);
+            }
+        }
+
+        // Update metrics
+        function updateMetrics(data, signal) {
+            const currentPrice = data[data.length - 1];
+            const previousPrice = data[data.length - 2];
+            const priceChange = ((currentPrice - previousPrice) / previousPrice * 100);
+            
+            // Calculate volatility
+            const returns = [];
+            for (let i = 1; i < data.length; i++) {
+                returns.push((data[i] - data[i-1]) / data[i-1]);
+            }
+            const volatility = Math.sqrt(returns.reduce((a, b) => a + b*b, 0) / returns.length) * 100;
+            
+            document.getElementById('currentPrice').textContent = currentPrice.toFixed(4);
+            document.getElementById('priceChange').textContent = priceChange.toFixed(2) + '%';
+            document.getElementById('priceChange').style.color = priceChange >= 0 ? '#00ff88' : '#ff4444';
+            document.getElementById('volatility').textContent = volatility.toFixed(2) + '%';
+            document.getElementById('volume').textContent = Math.floor(Math.random() * 1000000).toLocaleString();
+        }
+
+        // Display signal
+        function displaySignal(signal, symbol) {
+            const container = document.getElementById('signalContainer');
+            const signalClass = `signal-${signal.signal.toLowerCase()}`;
+            
+            container.innerHTML = `
+                <div class="signal-card ${signalClass}">
+                    <h4>🎯 ${signal.signal} ${symbol}</h4>
+                    <p><strong>Confidence:</strong> ${signal.confidence.toFixed(1)}%</p>
+                    <p><strong>Entry:</strong> ${signal.entry_price.toFixed(4)}</p>
+                    <p><strong>Stop Loss:</strong> ${signal.sl_level.toFixed(4)}</p>
+                    <p><strong>Take Profits:</strong></p>
+                    <ul>
+                        ${signal.tp_levels.map((tp, i) => `<li>TP${i+1}: ${tp.toFixed(4)}</li>`).join('')}
+                    </ul>
+                    <p><strong>Position Size:</strong> ${(signal.position_size * 100).toFixed(2)}%</p>
+                </div>
+                
+                <div class="signal-card">
+                    <h4>📊 Timeframe Analysis</h4>
+                    <div class="timeframe-grid">
+                        ${Object.entries(signal.timeframe_alignment).map(([tf, status]) => 
+                            `<div class="timeframe-item ${status.toLowerCase()}">${tf}: ${status}</div>`
+                        ).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Auto update functions
+       // Auto update functions
+        function startAutoUpdate() {
+            if (autoUpdateInterval) clearInterval(autoUpdateInterval);
+            
+            autoUpdateInterval = setInterval(() => {
+                analyzeSymbol();
+            }, 30000); // Update every 30 seconds
+            
+            updateStatus('Auto-update started (30s intervals)');
+        }
+
+        function stopAutoUpdate() {
+            if (autoUpdateInterval) {
+                clearInterval(autoUpdateInterval);
+                autoUpdateInterval = null;
+                updateStatus('Auto-update stopped');
+            }
+        }
+
+        // Update status function
+        function updateStatus(message) {
+            const statusEl = document.getElementById('status');
+            statusEl.innerHTML = message.includes('...') ? 
+                `<span class="loading"></span> ${message}` : message;
+        }
+
+        // Risk tolerance slider update
+        document.getElementById('riskTolerance').addEventListener('input', function() {
+            document.getElementById('riskValue').textContent = (this.value * 100).toFixed(0) + '%';
+        });
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeChart();
+            updateStatus('System Ready - Select symbol and analyze');
+        });
+    </script>
+</body>
+</html>
