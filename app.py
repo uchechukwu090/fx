@@ -659,6 +659,12 @@ def health_check():
         'version': '2.0.0',
         'data_provider': 'Finnhub'
     })
+@app.route('/webhook/finnhub', methods=['POST'])
+def finnhub_webhook():
+    secret = request.headers.get('X-Finnhub-Secret')
+    if secret != 'd1e5t6hr01qlt46sr0k0':
+        return "Forbidden", 403
+    return "ok", 200  # acknowledge immediately
 
 @app.route('/', methods=['GET'])
 def home():
@@ -667,7 +673,7 @@ def home():
 # Background task for periodic updates
 def background_updater():
     """Background task to update prices periodically"""
-    symbols = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'AMZN', 'NVDA', 'META', 'BTC-USD', 'ETH-USD']
+    symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'AMZN', 'NVDA', 'META', 'BTC-USD', 'ETH-USD']
     
     while True:
         try:
