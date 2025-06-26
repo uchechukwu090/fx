@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 import logging
 
@@ -35,7 +35,7 @@ class Config:
     
     # Background Tasks Configuration
     UPDATE_INTERVAL: int = int(os.getenv('UPDATE_INTERVAL', 300))  # seconds
-    BACKGROUND_SYMBOLS: list = os.getenv('BACKGROUND_SYMBOLS', 'AAPL,MSFT,GOOGL,TSLA,AMZN,NVDA,META,BTC-USD,ETH-USD').split(',')
+    BACKGROUND_SYMBOLS: list = field(default_factory=list)
     
     # Logging Configuration
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
