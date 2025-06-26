@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - PORT=5000
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY:-d1e5t6hr01qlt46sr0igd1e5t6hr01qlt46sr0j0}
+      - DATABASE_PATH=${DATABASE_PATH:-/app/data/trading_bot.db}
+      - RISK_TOLERANCE=${RISK_TOLERANCE:-0.02}
+      - WAVELET_TYPE=${WAVELET_TYPE:-db4}
+      - PROCESS_NOISE=${PROCESS_NOISE:-1e-5}
+      - MEASUREMENT_NOISE=${MEASUREMENT_NOISE:-1e-1}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - trading_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+volumes:
+  trading_data:
+    driver: local

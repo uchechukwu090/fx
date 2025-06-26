@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: advanced-trading-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 app:app"
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /api/health
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: FINNHUB_API_KEY
+        value: d1e5t6hr01qlt46sr0igd1e5t6hr01qlt46sr0j0
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/data/trading_bot.db
+      - key: RISK_TOLERANCE
+        value: "0.02"
+      - key: WAVELET_TYPE
+        value: db4
+      - key: PROCESS_NOISE
+        value: "1e-5"
+      - key: MEASUREMENT_NOISE
+        value: "1e-1"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: UPDATE_INTERVAL
+        value: "300"
+      - key: API_TIMEOUT
+        value: "10"
+      - key: GUNICORN_WORKERS
+        value: "2"
+      - key: GUNICORN_THREADS
+        value: "4"
+      - key: GUNICORN_TIMEOUT
+        value: "120"
+    disk:
+      name: trading-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+databases:
+  - name: trading-bot-db
+    databaseName: trading_bot
+    user: trading_user
+    plan: starter
+    region: oregon
