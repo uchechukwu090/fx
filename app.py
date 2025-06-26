@@ -8,7 +8,7 @@ import warnings
 import requests
 from datetime import datetime, timedelta
 import sqlite3
-from flask import Flask, request, jsonify
+from flask import Flask, render_template
 from flask_cors import CORS
 import threading
 import time
@@ -662,19 +662,7 @@ def health_check():
 
 @app.route('/', methods=['GET'])
 def home():
-    """Home endpoint"""
-    return jsonify({
-        'message': 'Advanced Trading Bot API',
-        'version': '2.0.0',
-        'endpoints': [
-            '/api/analyze - POST - Analyze trading signal',
-            '/api/price/<symbol> - GET - Get current price',
-            '/api/historical/<symbol> - GET - Get historical data',
-            '/api/search/<query> - GET - Search symbols',
-            '/api/signals/<symbol> - GET - Get signal history',
-            '/api/health - GET - Health check'
-        ]
-    })
+    return render_template('index.html')
 
 # Background task for periodic updates
 def background_updater():
