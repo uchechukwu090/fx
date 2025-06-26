@@ -35,7 +35,7 @@ class Config:
     
     # Background Tasks Configuration
     UPDATE_INTERVAL: int = int(os.getenv('UPDATE_INTERVAL', 300))  # seconds
-    BACKGROUND_SYMBOLS: list = field(default_factory=list)
+    BACKGROUND_SYMBOLS: list = field(default_factory=lambda: ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'AMZN', 'NVDA', 'META', 'BTC-USD', 'ETH-USD'])
     
     # Logging Configuration
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
