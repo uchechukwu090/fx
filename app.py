@@ -8,7 +8,7 @@ import warnings
 import requests
 from datetime import datetime, timedelta
 import sqlite3
-from flask import Flask, render_template
+from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import threading
 import time
