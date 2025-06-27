@@ -19,19 +19,26 @@ from config import config
 
 warnings.filterwarnings('ignore')
 
+# Helper: always extract scalar from array/float/list
+def to_scalar(x):
+    arr = np.asarray(x)
+    if arr.size == 1:
+        return float(arr.item())
+    raise ValueError(f"Expected scalar, got array: {x}")
+
 # Configure logging using config
 config.setup_logging()
 logger = logging.getLogger(__name__)
 
 @dataclass
 class TradingSignal:
-    signal: str  # BUY/SELL/HOLD
-    confidence: float  # 0-100%
+    signal: str
+    confidence: float
     entry_price: float
-    tp_levels: List[float]  # Multiple take profit levels
+    tp_levels: List[float]
     sl_level: float
-    position_size: float  # Recommended position size
-    timeframe_alignment: Dict[str, str]  # Status of each timeframe
+    position_size: float
+    timeframe_alignment: Dict[str, str]
     timestamp: str = ""
 
 class WaveletTransform:
@@ -40,33 +47,20 @@ class WaveletTransform:
         self.timeframes = ['1min', '5min', '15min', '1hr', '4hr', 'daily']
 
     def decompose(self, price_data: np.array, levels: int = 6) -> Dict:
-        """Decompose price data into different timeframe components"""
         try:
-            # Ensure we have enough data points
             if len(price_data) < 2**levels:
-                # Pad data if necessary
                 padding_size = 2**levels - len(price_data)
                 price_data = np.pad(price_data, (0, padding_size), mode='edge')
-            
-            # Perform wavelet decomposition
             coeffs = pywt.wavedec(price_data, self.wavelet_type, level=levels)
-            
-            # Reconstruct components for different timeframes
             components = {}
             for i, timeframe in enumerate(self.timeframes[:len(coeffs)-1]):
-                # Create zero arrays for all levels
                 temp_coeffs = [np.zeros_like(c) for c in coeffs]
-                # Set only the current level
                 temp_coeffs[i+1] = coeffs[i+1]
-                # Reconstruct
                 reconstructed = pywt.waverec(temp_coeffs, self.wavelet_type)
                 components[timeframe] = reconstructed[:len(price_data)]
-                
-            # Approximation (trend)
             temp_coeffs = [coeffs[0]] + [np.zeros_like(c) for c in coeffs[1:]]
             trend = pywt.waverec(temp_coeffs, self.wavelet_type)
             components['trend'] = trend[:len(price_data)]
-            
             return components
         except Exception as e:
             logger.error(f"Wavelet decomposition error: {e}")
@@ -79,64 +73,40 @@ class KalmanFilter:
         self.reset()
 
     def reset(self):
-        # State: [price, velocity, acceleration]
         self.state = np.array([0.0, 0.0, 0.0])
         self.covariance = np.eye(3) * 1000
-        
-        # State transition matrix (constant velocity + acceleration model)
-        self.F = np.array([[1, 1, 0.5],
-                          [0, 1, 1],
-                          [0, 0, 0.95]])  # Decay acceleration
-        
-        # Observation matrix (we only observe price)
+        self.F = np.array([[1, 1, 0.5], [0, 1, 1], [0, 0, 0.95]])
         self.H = np.array([[1, 0, 0]])
-        
-        # Process noise covariance
         self.Q = np.eye(3) * self.process_noise
-        
-        # Measurement noise covariance
         self.R = np.array([[self.measurement_noise]])
-        
+
     def update(self, measurement: float) -> Dict:
-        """Update Kalman filter with new price measurement"""
-        # Prediction step
         predicted_state = self.F @ self.state
         predicted_covariance = self.F @ self.covariance @ self.F.T + self.Q
-        
-        # Update step
         residual = measurement - self.H @ predicted_state
         residual_covariance = self.H @ predicted_covariance @ self.H.T + self.R
-        
-        # Handle numerical issues
         if residual_covariance[0, 0] <= 0:
             residual_covariance[0, 0] = 1e-6
-            
         kalman_gain = predicted_covariance @ self.H.T / residual_covariance[0, 0]
-        
         self.state = predicted_state + kalman_gain * residual
         self.covariance = (np.eye(3) - kalman_gain @ self.H) @ predicted_covariance
-        
         return {
-            'price': float(self.state[0]),
-            'velocity': float(self.state[1]),
-            'acceleration': float(self.state[2]),
-            'volatility': float(np.sqrt(max(self.covariance[0, 0], 1e-6)))
+            'price': to_scalar(self.state[0]),
+            'velocity': to_scalar(self.state[1]),
+            'acceleration': to_scalar(self.state[2]),
+            'volatility': to_scalar(np.sqrt(max(self.covariance[0, 0], 1e-6)))
         }
 
     def process_timeframe(self, price_series: np.array) -> Dict:
-        """Process entire price series for a timeframe"""
         self.reset()
         results = []
-        
         for price in price_series:
-            if not np.isnan(price) and np.isfinite(price):
-                result = self.update(price)
+            val = to_scalar(price)
+            if not np.isnan(val) and np.isfinite(val):
+                result = self.update(val)
                 results.append(result)
-        
         if not results:
             return {'price': 0, 'velocity': 0, 'acceleration': 0, 'volatility': 0.01}
-            
-        # Return latest state
         return results[-1]
 
 class BayesianInference:
@@ -145,80 +115,54 @@ class BayesianInference:
         self.prior_bull = 0.5
 
     def calculate_signal_probability(self, kalman_states: Dict) -> Dict:
-        """Calculate probabilities for buy/sell/hold based on Kalman states"""
         signals = {}
-        
         for timeframe, state in kalman_states.items():
             if timeframe == 'trend':
                 continue
-                
             velocity = state.get('velocity', 0)
             acceleration = state.get('acceleration', 0)
             volatility = max(state.get('volatility', 0.01), 0.01)
-            
-            # Calculate momentum score
             momentum_score = velocity / volatility
             acceleration_score = acceleration / volatility
-            
-            # Combined score
             combined_score = momentum_score + acceleration_score * 0.5
-            
-            # Use tanh to normalize to [-1, 1] range
             likelihood_bull = 0.5 + 0.5 * np.tanh(combined_score)
             likelihood_bear = 1 - likelihood_bull
-            
-            # Posterior probability using Bayes theorem
-            posterior_bull = (likelihood_bull * self.prior_bull) / \
-                           (likelihood_bull * self.prior_bull + likelihood_bear * (1 - self.prior_bull))
-            
+            posterior_bull = (likelihood_bull * self.prior_bull) / (
+                likelihood_bull * self.prior_bull + likelihood_bear * (1 - self.prior_bull))
             signals[timeframe] = {
                 'bull_prob': float(posterior_bull),
                 'bear_prob': float(1 - posterior_bull),
                 'momentum': float(momentum_score),
                 'strength': float(abs(momentum_score))
             }
-        
         return signals
 
     def generate_trading_signal(self, kalman_states: Dict, current_price: float) -> TradingSignal:
-        """Generate final trading signal"""
         signal_probs = self.calculate_signal_probability(kalman_states)
-        
-        # Weight timeframes (longer timeframes have more weight)
         weights = {'1min': 0.1, '5min': 0.15, '15min': 0.2, '1hr': 0.25, '4hr': 0.3}
-        
         weighted_bull_prob = 0
         weighted_bear_prob = 0
         timeframe_alignment = {}
-        
         for timeframe, prob_data in signal_probs.items():
             if timeframe in weights:
                 weight = weights[timeframe]
                 weighted_bull_prob += prob_data['bull_prob'] * weight
                 weighted_bear_prob += prob_data['bear_prob'] * weight
-                
-                # Determine timeframe direction
                 if prob_data['bull_prob'] > 0.6:
                     timeframe_alignment[timeframe] = 'BULLISH'
                 elif prob_data['bear_prob'] > 0.6:
                     timeframe_alignment[timeframe] = 'BEARISH'
                 else:
                     timeframe_alignment[timeframe] = 'NEUTRAL'
-        
-        # Generate signal
         confidence = max(weighted_bull_prob, weighted_bear_prob) * 100
-        
         if weighted_bull_prob > 0.65:
             signal = 'BUY'
         elif weighted_bear_prob > 0.65:
             signal = 'SELL'
         else:
             signal = 'HOLD'
-        
-        # Calculate TP/SL levels
         volatilities = [state.get('volatility', 0.01) for state in kalman_states.values() if 'volatility' in state]
         avg_volatility = np.mean(volatilities) if volatilities else 0.01
-        
         if signal == 'BUY':
             tp_levels = [
                 current_price + avg_volatility * 1.5,
@@ -236,17 +180,14 @@ class BayesianInference:
         else:
             tp_levels = [current_price]
             sl_level = current_price
-        
-        # Position size based on confidence and risk tolerance
         position_size = min(confidence / 100 * self.risk_tolerance, self.risk_tolerance)
-        
         return TradingSignal(
             signal=signal,
-            confidence=confidence,
-            entry_price=current_price,
-            tp_levels=tp_levels,
-            sl_level=sl_level,
-            position_size=position_size,
+            confidence=to_scalar(confidence),
+            entry_price=to_scalar(current_price),
+            tp_levels=[to_scalar(x) for x in tp_levels],
+            sl_level=to_scalar(sl_level),
+            position_size=to_scalar(position_size),
             timeframe_alignment=timeframe_alignment,
             timestamp=datetime.now().isoformat()
         )
@@ -258,27 +199,18 @@ class AdvancedTradingSystem:
         self.bayesian = BayesianInference(risk_tolerance)
 
     def analyze(self, price_data: np.array) -> TradingSignal:
-        """Main analysis function"""
         if len(price_data) < config.MIN_DATA_POINTS:
             raise ValueError(f"Need at least {config.MIN_DATA_POINTS} data points for analysis")
-        
-        # Step 1: Wavelet decomposition
         wavelet_components = self.wavelet.decompose(price_data)
-        
         if not wavelet_components:
             raise ValueError("Wavelet decomposition failed")
-        
-        # Step 2: Kalman filtering for each timeframe
         kalman_states = {}
         for timeframe in self.wavelet.timeframes:
             if timeframe in wavelet_components:
                 component_data = wavelet_components[timeframe]
                 kalman_states[timeframe] = self.kalman_filters[timeframe].process_timeframe(component_data)
-        
-        # Step 3: Bayesian inference
-        current_price = float(np.asarray(price_data[-1]).item())
+        current_price = to_scalar(price_data[-1])
         trading_signal = self.bayesian.generate_trading_signal(kalman_states, current_price)
-        
         return trading_signal
 
 class TwelveDataProvider:
@@ -286,11 +218,9 @@ class TwelveDataProvider:
         self.api_key = api_key
         self.base_url = 'https://api.twelvedata.com'
         self.session = requests.Session()
-        
-        # Symbol mapping for common trading pairs and assets
         self.symbol_mapping = {
             'EURUSD': 'EUR/USD',
-            'GBPUSD': 'GBP/USD', 
+            'GBPUSD': 'GBP/USD',
             'USDJPY': 'USD/JPY',
             'USDCHF': 'USD/CHF',
             'AUDUSD': 'AUD/USD',
@@ -308,71 +238,43 @@ class TwelveDataProvider:
         }
 
     def get_twelve_data_symbol(self, symbol: str) -> str:
-        """Convert common symbol formats to Twelve Data format"""
-        # Remove common suffixes/prefixes
         symbol = symbol.upper().replace('-USD', 'USD').replace('_USD', 'USD')
-        
-        # Check mapping first
         if symbol in self.symbol_mapping:
             return self.symbol_mapping[symbol]
-        
-        # For forex pairs, add slash if it's 6 characters
         if len(symbol) == 6 and symbol.isalpha():
             return f"{symbol[:3]}/{symbol[3:]}"
-        
-        # For stocks, keep as is
         return symbol
 
     def get_current_price(self, symbol: str) -> Dict:
-        """Get current price for any symbol"""
         try:
             twelve_data_symbol = self.get_twelve_data_symbol(symbol)
-            
-            # Get real-time price
             quote_url = f"{self.base_url}/price"
-            quote_params = {
-                'symbol': twelve_data_symbol,
-                'apikey': self.api_key
-            }
-            
+            quote_params = {'symbol': twelve_data_symbol, 'apikey': self.api_key}
             quote_response = self.session.get(quote_url, params=quote_params, timeout=10)
             quote_response.raise_for_status()
             quote_data = quote_response.json()
-            
             if 'price' not in quote_data:
                 raise ValueError(f"No price data returned for {symbol}")
-            
-            current_price = float(quote_data['price'])
-            
-            # Get additional quote data for more context
+            current_price = to_scalar(quote_data['price'])
             quote_detail_url = f"{self.base_url}/quote"
-            quote_detail_params = {
-                'symbol': twelve_data_symbol,
-                'apikey': self.api_key
-            }
-            
+            quote_detail_params = {'symbol': twelve_data_symbol, 'apikey': self.api_key}
             try:
                 detail_response = self.session.get(quote_detail_url, params=quote_detail_params, timeout=10)
                 detail_response.raise_for_status()
                 detail_data = detail_response.json()
-                
-                previous_close = float(detail_data.get('previous_close', current_price))
-                high = float(detail_data.get('high', current_price))
-                low = float(detail_data.get('low', current_price))
-                open_price = float(detail_data.get('open', current_price))
+                previous_close = to_scalar(detail_data.get('previous_close', current_price))
+                high = to_scalar(detail_data.get('high', current_price))
+                low = to_scalar(detail_data.get('low', current_price))
+                open_price = to_scalar(detail_data.get('open', current_price))
                 volume = int(detail_data.get('volume', 0))
-                
             except:
-                # Fallback values if detailed quote fails
                 previous_close = current_price
                 high = current_price
                 low = current_price
                 open_price = current_price
                 volume = 0
-            
             change = current_price - previous_close
             change_percent = (change / previous_close * 100) if previous_close != 0 else 0
-            
             return {
                 'symbol': symbol,
                 'twelve_data_symbol': twelve_data_symbol,
@@ -386,7 +288,6 @@ class TwelveDataProvider:
                 'timestamp': datetime.now().isoformat(),
                 'volume': volume
             }
-            
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
             return {
@@ -400,15 +301,11 @@ class TwelveDataProvider:
             }
 
     def get_historical_data(self, symbol: str, days: int = None) -> List[float]:
-        """Get historical price data for any symbol"""
         if days is None:
             days = config.DEFAULT_HISTORICAL_DAYS
         days = min(days, config.MAX_HISTORICAL_DAYS)
-        
         try:
             twelve_data_symbol = self.get_twelve_data_symbol(symbol)
-            
-            # Get time series data
             ts_url = f"{self.base_url}/time_series"
             ts_params = {
                 'symbol': twelve_data_symbol,
@@ -416,56 +313,38 @@ class TwelveDataProvider:
                 'outputsize': str(days),
                 'apikey': self.api_key
             }
-            
             ts_response = self.session.get(ts_url, params=ts_params, timeout=15)
             ts_response.raise_for_status()
             ts_data = ts_response.json()
-            
             if 'values' in ts_data and ts_data['values']:
-                # Extract closing prices and reverse order (oldest to newest)
-                prices = [float(item['close']) for item in reversed(ts_data['values'])]
+                prices = [to_scalar(item['close']) for item in reversed(ts_data['values'])]
                 return prices
             else:
-                # Fallback: generate realistic sample data based on current price
                 current_data = self.get_current_price(symbol)
                 base_price = current_data['price'] if current_data['price'] > 0 else 1.0
-                
                 prices = []
                 current_price = base_price
-                
                 for i in range(days):
-                    # Generate realistic price movement
-                    change_percent = np.random.normal(0, 0.02)  # 2% daily volatility
-                    trend = 0.001 * np.sin(i * 0.1)  # Slight trend
-                    
+                    change_percent = np.random.normal(0, 0.02)
+                    trend = 0.001 * np.sin(i * 0.1)
                     current_price *= (1 + change_percent + trend)
-                    prices.append(current_price)
-                
+                    prices.append(to_scalar(current_price))
                 return prices
-                
         except Exception as e:
             logger.error(f"Error getting historical data for {symbol}: {e}")
-            # Fallback data
-            return [1.0 + i * 0.01 + np.random.normal(0, 0.02) for i in range(days)]
+            return [to_scalar(1.0 + i * 0.01 + np.random.normal(0, 0.02)) for i in range(days)]
 
     def search_symbol(self, query: str) -> List[Dict]:
-        """Search for symbols"""
         try:
             search_url = f"{self.base_url}/symbol_search"
-            search_params = {
-                'symbol': query,
-                'apikey': self.api_key
-            }
-            
+            search_params = {'symbol': query, 'apikey': self.api_key}
             response = self.session.get(search_url, params=search_params, timeout=10)
             response.raise_for_status()
             data = response.json()
-            
             if 'data' in data:
                 return data['data']
             else:
                 return []
-            
         except Exception as e:
             logger.error(f"Error searching for {query}: {e}")
             return []
@@ -476,11 +355,8 @@ class DatabaseManager:
         self.init_database()
 
     def init_database(self):
-        """Initialize database tables"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        # Signals table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -495,8 +371,6 @@ class DatabaseManager:
                 timestamp TEXT NOT NULL
             )
         ''')
-        
-        # Price history table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS price_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -508,15 +382,12 @@ class DatabaseManager:
                 timestamp TEXT NOT NULL
             )
         ''')
-        
         conn.commit()
         conn.close()
 
     def save_signal(self, symbol: str, signal: TradingSignal):
-        """Save trading signal to database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
         cursor.execute('''
             INSERT INTO signals (symbol, signal, confidence, entry_price, tp_levels, 
                                sl_level, position_size, timeframe_alignment, timestamp)
@@ -524,101 +395,77 @@ class DatabaseManager:
         ''', (
             symbol,
             signal.signal,
-            signal.confidence,
-            signal.entry_price,
-            json.dumps(signal.tp_levels),
-            signal.sl_level,
-            signal.position_size,
+            to_scalar(signal.confidence),
+            to_scalar(signal.entry_price),
+            json.dumps([to_scalar(x) for x in signal.tp_levels]),
+            to_scalar(signal.sl_level),
+            to_scalar(signal.position_size),
             json.dumps(signal.timeframe_alignment),
             signal.timestamp
         ))
-        
         conn.commit()
         conn.close()
 
     def save_price_data(self, price_data: Dict):
-        """Save price data to database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
         cursor.execute('''
             INSERT INTO price_history (symbol, price, change_val, change_percent, volume, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (
             price_data['symbol'],
-            price_data['price'],
-            price_data['change'],
-            price_data['change_percent'],
-            price_data['volume'],
+            to_scalar(price_data['price']),
+            to_scalar(price_data['change']),
+            to_scalar(price_data['change_percent']),
+            int(price_data['volume']),
             price_data['timestamp']
         ))
-        
         conn.commit()
         conn.close()
 
-# Flask Application
 app = Flask(__name__)
 CORS(app)
 
-# Global instances
 data_provider = TwelveDataProvider()
 db_manager = DatabaseManager()
-trading_systems = {}  # Cache for trading systems with different parameters
+trading_systems = {}
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_symbol():
-    """Analyze a symbol and return trading signal"""
     try:
         data = request.json
         symbol = data.get('symbol', 'AAPL')
         timeframe = data.get('timeframe', '1hr')
         risk_tolerance = float(data.get('risk_tolerance', config.RISK_TOLERANCE))
         wavelet_type = data.get('wavelet_type', config.WAVELET_TYPE)
-
-        # Create or get trading system with these parameters
         system_key = f"{wavelet_type}_{risk_tolerance}"
         if system_key not in trading_systems:
             trading_systems[system_key] = AdvancedTradingSystem(
                 wavelet_type=wavelet_type,
                 risk_tolerance=risk_tolerance
             )
-        
         trading_system = trading_systems[system_key]
-        
-        # Get current price data
         current_data = data_provider.get_current_price(symbol)
-        
-        # Get historical data
         historical_prices = data_provider.get_historical_data(symbol, config.DEFAULT_HISTORICAL_DAYS)
-        
         if len(historical_prices) < config.MIN_DATA_POINTS:
             return jsonify({'error': f'Insufficient historical data. Need at least {config.MIN_DATA_POINTS} points'}), 400
-        
-        # Analyze
-        price_array = np.array(historical_prices)
+        price_array = np.array([to_scalar(x) for x in historical_prices])
         signal = trading_system.analyze(price_array)
-        
-        # Save to database
         db_manager.save_signal(symbol, signal)
         db_manager.save_price_data(current_data)
-        
-        # Prepare response
         response = {
             'signal': asdict(signal),
             'current_data': current_data,
-            'historical_data': historical_prices[-50:],  # Last 50 points for chart
+            'historical_data': [to_scalar(x) for x in historical_prices][-50:],
             'timestamp': datetime.now().isoformat()
         }
-        
         return jsonify(response)
-        
     except Exception as e:
         logger.error(f"Analysis error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/price/<symbol>', methods=['GET'])
 def get_price(symbol):
-    """Get current price for a symbol"""
     try:
         price_data = data_provider.get_current_price(symbol)
         db_manager.save_price_data(price_data)
@@ -629,15 +476,13 @@ def get_price(symbol):
 
 @app.route('/api/historical/<symbol>', methods=['GET'])
 def get_historical(symbol):
-    """Get historical data for a symbol"""
     try:
         days = int(request.args.get('days', config.DEFAULT_HISTORICAL_DAYS))
         days = min(days, config.MAX_HISTORICAL_DAYS)
         historical_data = data_provider.get_historical_data(symbol, days)
-        
         return jsonify({
             'symbol': symbol,
-            'data': historical_data,
+            'data': [to_scalar(x) for x in historical_data],
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
@@ -646,7 +491,6 @@ def get_historical(symbol):
 
 @app.route('/api/search/<query>', methods=['GET'])
 def search_symbols(query):
-    """Search for symbols"""
     try:
         results = data_provider.search_symbol(query)
         return jsonify({
@@ -660,45 +504,37 @@ def search_symbols(query):
 
 @app.route('/api/signals/<symbol>', methods=['GET'])
 def get_signals_history(symbol):
-    """Get signal history for a symbol"""
     try:
         conn = sqlite3.connect(db_manager.db_path)
         cursor = conn.cursor()
-        
         cursor.execute('''
             SELECT * FROM signals WHERE symbol = ? 
             ORDER BY timestamp DESC LIMIT 10
         ''', (symbol,))
-        
         signals = cursor.fetchall()
         conn.close()
-        
-        # Convert to dict format
         signal_list = []
         for signal in signals:
             signal_dict = {
                 'id': signal[0],
                 'symbol': signal[1],
                 'signal': signal[2],
-                'confidence': signal[3],
-                'entry_price': signal[4],
-                'tp_levels': json.loads(signal[5]),
-                'sl_level': signal[6],
-                'position_size': signal[7],
+                'confidence': to_scalar(signal[3]),
+                'entry_price': to_scalar(signal[4]),
+                'tp_levels': [to_scalar(x) for x in json.loads(signal[5])],
+                'sl_level': to_scalar(signal[6]),
+                'position_size': to_scalar(signal[7]),
                 'timeframe_alignment': json.loads(signal[8]),
                 'timestamp': signal[9]
             }
             signal_list.append(signal_dict)
-        
         return jsonify({'signals': signal_list})
-        
     except Exception as e:
         logger.error(f"Signals history error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
@@ -710,12 +546,8 @@ def health_check():
 def home():
     return render_template('index.html')
 
-# Background task for periodic updates
 def background_updater():
-    """Background task to update prices periodically - optimized for free tier"""
-    # Reduced to 3 symbols to stay within free tier limits
-    symbols = ['EUR/USD', 'XAU/USD', 'USD/JPY']  # Using proper Twelve Data format
-    
+    symbols = ['EUR/USD', 'XAU/USD', 'USD/JPY']
     while True:
         try:
             for symbol in symbols:
@@ -723,27 +555,19 @@ def background_updater():
                     price_data = data_provider.get_current_price(symbol)
                     db_manager.save_price_data(price_data)
                     logger.info(f"Updated price for {symbol}: {price_data['price']}")
-                    time.sleep(5)  # 5 second delay between API calls for rate limiting
+                    time.sleep(5)
                 except Exception as e:
                     logger.error(f"Error updating {symbol}: {e}")
                     continue
-            
-            # Update every 9 minutes to stay within API limits
             logger.info("Background update cycle completed, waiting 9 minutes...")
-            time.sleep(540)  # 9 minutes = 540 seconds
-            
+            time.sleep(540)
         except Exception as e:
             logger.error(f"Background update error: {e}")
-            time.sleep(60)  # Wait 1 minute before retry
+            time.sleep(60)
 
 if __name__ == '__app__':
-    # Start background updater
     updater_thread = threading.Thread(target=background_updater, daemon=True)
     updater_thread.start()
     logger.info("Background updater started with 9-minute intervals")
-    
-    # Get port from environment variable (Render requirement)
     port = int(os.environ.get('PORT', 5000))
-    
-    # Run Flask app
     app.run(host='0.0.0.0', port=port, debug=False)
