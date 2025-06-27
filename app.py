@@ -276,7 +276,7 @@ class AdvancedTradingSystem:
                 kalman_states[timeframe] = self.kalman_filters[timeframe].process_timeframe(component_data)
         
         # Step 3: Bayesian inference
-        current_price = float(price_data[-1])
+        current_price = float(np.asarray(price_data[-1]).item())
         trading_signal = self.bayesian.generate_trading_signal(kalman_states, current_price)
         
         return trading_signal
