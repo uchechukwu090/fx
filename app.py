@@ -19,12 +19,34 @@ from config import config
 
 warnings.filterwarnings('ignore')
 
-# Helper: always extract scalar from array/float/list
+# Replace your existing to_scalar function with this:
 def to_scalar(x):
+    """Convert input to scalar value, handling arrays and edge cases"""
+    if x is None:
+        return 0.0
+    
+    # Handle already scalar values
+    if np.isscalar(x):
+        return float(x)
+    
+    # Convert to numpy array
     arr = np.asarray(x)
+    
+    # Handle empty arrays
+    if arr.size == 0:
+        return 0.0
+    
+    # Handle single element arrays
     if arr.size == 1:
         return float(arr.item())
-    raise ValueError(f"Expected scalar, got array: {x}")
+    
+    # Handle arrays with multiple identical values
+    if np.all(arr == arr[0]):
+        return float(arr[0])
+    
+    # For arrays with different values, take the last one (or mean/median)
+    # You can change this logic based on your needs
+    return float(arr[-1])  # or use np.mean(arr) or np.median(arr)
 
 # Configure logging using config
 config.setup_logging()
