@@ -159,60 +159,88 @@ class BayesianInference:
             }
         return signals
 
-    def generate_trading_signal(self, kalman_states: Dict, current_price: float) -> TradingSignal:
-        signal_probs = self.calculate_signal_probability(kalman_states)
-        weights = {'1min': 0.1, '5min': 0.15, '15min': 0.2, '1hr': 0.25, '4hr': 0.3}
-        weighted_bull_prob = 0
-        weighted_bear_prob = 0
-        timeframe_alignment = {}
-        for timeframe, prob_data in signal_probs.items():
-            if timeframe in weights:
-                weight = weights[timeframe]
-                weighted_bull_prob += prob_data['bull_prob'] * weight
-                weighted_bear_prob += prob_data['bear_prob'] * weight
-                if prob_data['bull_prob'] > 0.6:
-                    timeframe_alignment[timeframe] = 'BULLISH'
-                elif prob_data['bear_prob'] > 0.6:
-                    timeframe_alignment[timeframe] = 'BEARISH'
-                else:
-                    timeframe_alignment[timeframe] = 'NEUTRAL'
-        confidence = max(weighted_bull_prob, weighted_bear_prob) * 100
-        if weighted_bull_prob > 0.65:
-            signal = 'BUY'
-        elif weighted_bear_prob > 0.65:
-            signal = 'SELL'
-        else:
-            signal = 'HOLD'
-        volatilities = [state.get('volatility', 0.01) for state in kalman_states.values() if 'volatility' in state]
-        avg_volatility = np.mean(volatilities) if volatilities else 0.01
-        if signal == 'BUY':
-            tp_levels = [
-                current_price + avg_volatility * 1.5,
-                current_price + avg_volatility * 2.5,
-                current_price + avg_volatility * 4.0
-            ]
-            sl_level = current_price - avg_volatility * 2.0
-        elif signal == 'SELL':
-            tp_levels = [
-                current_price - avg_volatility * 1.5,
-                current_price - avg_volatility * 2.5,
-                current_price - avg_volatility * 4.0
-            ]
-            sl_level = current_price + avg_volatility * 2.0
-        else:
-            tp_levels = [current_price]
-            sl_level = current_price
-        position_size = min(confidence / 100 * self.risk_tolerance, self.risk_tolerance)
-        return TradingSignal(
-            signal=signal,
-            confidence=to_scalar(confidence),
-            entry_price=to_scalar(current_price),
-            tp_levels=[to_scalar(x) for x in tp_levels],
-            sl_level=to_scalar(sl_level),
-            position_size=to_scalar(position_size),
-            timeframe_alignment=timeframe_alignment,
-            timestamp=datetime.now().isoformat()
-        )
+   # Replace your generate_trading_signal method in BayesianInference class:
+
+def generate_trading_signal(self, kalman_states: Dict, current_price: float) -> TradingSignal:
+    signal_probs = self.calculate_signal_probability(kalman_states)
+    weights = {'1min': 0.1, '5min': 0.15, '15min': 0.2, '1hr': 0.25, '4hr': 0.3}
+    weighted_bull_prob = 0
+    weighted_bear_prob = 0
+    timeframe_alignment = {}
+    
+    for timeframe, prob_data in signal_probs.items():
+        if timeframe in weights:
+            weight = weights[timeframe]
+            weighted_bull_prob += prob_data['bull_prob'] * weight
+            weighted_bear_prob += prob_data['bear_prob'] * weight
+            if prob_data['bull_prob'] > 0.6:
+                timeframe_alignment[timeframe] = 'BULLISH'
+            elif prob_data['bear_prob'] > 0.6:
+                timeframe_alignment[timeframe] = 'BEARISH'
+            else:
+                timeframe_alignment[timeframe] = 'NEUTRAL'
+    
+    confidence = max(weighted_bull_prob, weighted_bear_prob) * 100
+    
+    if weighted_bull_prob > 0.65:
+        signal = 'BUY'
+    elif weighted_bear_prob > 0.65:
+        signal = 'SELL'
+    else:
+        signal = 'HOLD'
+    
+    # IMPROVED VOLATILITY CALCULATION
+    volatilities = [state.get('volatility', 0.01) for state in kalman_states.values() if 'volatility' in state]
+    kalman_volatility = np.mean(volatilities) if volatilities else 0.01
+    
+    # Calculate price-based volatility as backup
+    price_based_volatility = current_price * 0.02  # 2% of current price
+    
+    # Use the larger of the two volatilities, with minimum thresholds
+    if current_price > 100:  # For stocks/indices
+        min_volatility = current_price * 0.005  # 0.5% minimum
+        avg_volatility = max(kalman_volatility, price_based_volatility, min_volatility)
+    elif current_price > 1:  # For forex pairs
+        min_volatility = 0.001  # 10 pips minimum for forex
+        avg_volatility = max(kalman_volatility, price_based_volatility, min_volatility)
+    else:  # For crypto with small values
+        min_volatility = current_price * 0.01  # 1% minimum
+        avg_volatility = max(kalman_volatility, price_based_volatility, min_volatility)
+    
+    # BETTER TP/SL CALCULATION
+    if signal == 'BUY':
+        # More aggressive TP levels
+        tp_levels = [
+            current_price + avg_volatility * 3.0,   # First TP: 3x volatility
+            current_price + avg_volatility * 5.0,   # Second TP: 5x volatility  
+            current_price + avg_volatility * 8.0    # Third TP: 8x volatility
+        ]
+        sl_level = current_price - avg_volatility * 2.5  # SL: 2.5x volatility
+        
+    elif signal == 'SELL':
+        tp_levels = [
+            current_price - avg_volatility * 3.0,
+            current_price - avg_volatility * 5.0,
+            current_price - avg_volatility * 8.0
+        ]
+        sl_level = current_price + avg_volatility * 2.5
+        
+    else:  # HOLD
+        tp_levels = [current_price]
+        sl_level = current_price
+    
+    position_size = min(confidence / 100 * self.risk_tolerance, self.risk_tolerance)
+    
+    return TradingSignal(
+        signal=signal,
+        confidence=to_scalar(confidence),  
+        entry_price=to_scalar(current_price),
+        tp_levels=[to_scalar(x) for x in tp_levels],
+        sl_level=to_scalar(sl_level),
+        position_size=to_scalar(position_size),
+        timeframe_alignment=timeframe_alignment,
+        timestamp=datetime.now().isoformat()
+    )
 
 class AdvancedTradingSystem:
     def __init__(self, wavelet_type=None, process_noise=None, measurement_noise=None, risk_tolerance=None):
