@@ -13,8 +13,10 @@ services:
         value: production
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: FINNHUB_API_KEY
-        value: d1e5t6hr01qlt46sr0igd1e5t6hr01qlt46sr0j0
+      - key: TWELVE_DATA_API_KEY
+        value: fef3c30aa26c4831924fdb142f87550d
+      - key: TWELVE_DATA_BASE_URL
+        value: https://api.twelvedata.com/v1
       - key: DATABASE_PATH
         value: /opt/render/project/src/data/trading_bot.db
       - key: RISK_TOLERANCE
@@ -29,14 +31,28 @@ services:
         value: INFO
       - key: UPDATE_INTERVAL
         value: "300"
+      - key: API_RATE_LIMIT
+        value: "60"
       - key: API_TIMEOUT
         value: "10"
+      - key: CACHE_TIMEOUT
+        value: "60"
+      - key: MAX_CACHE_SIZE
+        value: "100"
       - key: GUNICORN_WORKERS
         value: "2"
       - key: GUNICORN_THREADS
         value: "4"
       - key: GUNICORN_TIMEOUT
         value: "120"
+      - key: GUNICORN_WORKER_CLASS
+        value: sync
+      - key: MIN_DATA_POINTS
+        value: "32"
+      - key: DEFAULT_HISTORICAL_DAYS
+        value: "100"
+      - key: MAX_HISTORICAL_DAYS
+        value: "365"
     disk:
       name: trading-data
       mountPath: /opt/render/project/src/data
