@@ -417,7 +417,7 @@
             priceChart.update();
 
             // Update UI with real signal
-            updateMetrics(data, result.signal);
+            updateMetrics(data, result.signal, result.current_data);
             displaySignal(result.signal, symbol);
             updateStatus('Analysis Complete');
         } catch (error) {
@@ -427,7 +427,7 @@
     }
 
     // Update metrics
-    function updateMetrics(data, signal) {
+    function updateMetrics(data, signal, current_data) {
         const currentPrice = data[data.length - 1];
         const previousPrice = data[data.length - 2];
         const priceChange = ((currentPrice - previousPrice) / previousPrice * 100);
@@ -443,7 +443,9 @@
         document.getElementById('priceChange').textContent = priceChange.toFixed(2) + '%';
         document.getElementById('priceChange').style.color = priceChange >= 0 ? '#00ff88' : '#ff4444';
         document.getElementById('volatility').textContent = volatility.toFixed(2) + '%';
-        document.getElementById('volume').textContent = (result.current_data?.volume || 0).toLocaleString();
+        document.getElementById('volume').textContent = (current_data && current_data.volume !== undefined)
+            ? Number(current_data.volume).toLocaleString()
+            : '-';
     }
 
     // Display trading signal
