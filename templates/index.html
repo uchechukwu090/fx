@@ -337,451 +337,174 @@
     </div>
 
     <script>
-        // Advanced Trading System Implementation
-        class WaveletTransform {
-            constructor(waveletType = 'db4') {
-                this.waveletType = waveletType;
-                this.timeframes = ['1min', '5min', '15min', '1hr', '4hr', 'daily'];
-            }
+    // Global variables
+    let priceChart;
+    let autoUpdateInterval;
 
-            // Simplified wavelet decomposition using DWT-like approach
-            decompose(priceData, levels = 6) {
-                try {
-                    const components = {};
-                    let data = [...priceData];
-                    
-                    // Apply successive low-pass and high-pass filtering
-                    for (let i = 0; i < this.timeframes.length && i < levels; i++) {
-                        const filtered = this.applyFilter(data, i);
-                        components[this.timeframes[i]] = filtered;
-                        data = this.downsample(data, 2);
+    // Initialize chart
+    function initializeChart() {
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        priceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Price',
+                    data: [],
+                    borderColor: '#00ff88',
+                    backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: { color: '#e0e0e0' }
                     }
-                    
-                    // Add trend component
-                    components['trend'] = this.movingAverage(priceData, 20);
-                    
-                    return components;
-                } catch (e) {
-                    console.error('Wavelet decomposition error:', e);
-                    return {};
-                }
-            }
-
-            applyFilter(data, level) {
-                // Simple filter approximation
-                const alpha = 0.3 / (level + 1);
-                const filtered = [];
-                filtered[0] = data[0];
-                
-                for (let i = 1; i < data.length; i++) {
-                    filtered[i] = alpha * data[i] + (1 - alpha) * filtered[i - 1];
-                }
-                
-                return filtered;
-            }
-
-            downsample(data, factor) {
-                return data.filter((_, index) => index % factor === 0);
-            }
-
-            movingAverage(data, window) {
-                const result = [];
-                for (let i = 0; i < data.length; i++) {
-                    const start = Math.max(0, i - window + 1);
-                    const values = data.slice(start, i + 1);
-                    const avg = values.reduce((a, b) => a + b, 0) / values.length;
-                    result.push(avg);
-                }
-                return result;
-            }
-        }
-
-        class KalmanFilter {
-            constructor(processNoise = 1e-5, measurementNoise = 1e-1) {
-                this.processNoise = processNoise;
-                this.measurementNoise = measurementNoise;
-                this.reset();
-            }
-
-            reset() {
-                this.state = [0, 0, 0]; // [price, velocity, acceleration]
-                this.covariance = [[1000, 0, 0], [0, 1000, 0], [0, 0, 1000]];
-            }
-
-            update(measurement) {
-                // Simplified Kalman filter implementation
-                const predicted = this.state[0] + this.state[1] + 0.5 * this.state[2];
-                const innovation = measurement - predicted;
-                
-                // Update state
-                const gain = this.covariance[0][0] / (this.covariance[0][0] + this.measurementNoise);
-                this.state[0] = predicted + gain * innovation;
-                this.state[1] = this.state[1] + this.state[2];
-                this.state[2] = this.state[2] * 0.95; // Decay acceleration
-                
-                // Update covariance (simplified)
-                this.covariance[0][0] = (1 - gain) * this.covariance[0][0] + this.processNoise;
-                
-                return {
-                    price: this.state[0],
-                    velocity: this.state[1],
-                    acceleration: this.state[2],
-                    volatility: Math.sqrt(this.covariance[0][0])
-                };
-            }
-
-            processTimeframe(priceSeries) {
-                this.reset();
-                let result = { price: 0, velocity: 0, acceleration: 0, volatility: 0 };
-                
-                for (const price of priceSeries) {
-                    if (!isNaN(price) && isFinite(price)) {
-                        result = this.update(price);
-                    }
-                }
-                
-                return result;
-            }
-        }
-
-        class BayesianInference {
-            constructor(riskTolerance = 0.02) {
-                this.riskTolerance = riskTolerance;
-                this.priorBull = 0.5;
-            }
-
-            calculateSignalProbability(kalmanStates) {
-                const signals = {};
-                
-                for (const [timeframe, state] of Object.entries(kalmanStates)) {
-                    if (timeframe === 'trend') continue;
-                    
-                    const velocity = state.velocity || 0;
-                    const acceleration = state.acceleration || 0;
-                    const volatility = Math.max(state.volatility || 0.01, 0.01);
-                    
-                    const momentumScore = velocity / volatility;
-                    const accelerationScore = acceleration / volatility;
-                    
-                    // Calculate probabilities using normal distribution
-                    const combinedScore = momentumScore + accelerationScore;
-                    const likelihoodBull = 0.5 + 0.5 * Math.tanh(combinedScore);
-                    
-                    signals[timeframe] = {
-                        bull_prob: likelihoodBull,
-                        bear_prob: 1 - likelihoodBull,
-                        momentum: momentumScore,
-                        strength: Math.abs(momentumScore)
-                    };
-                }
-                
-                return signals;
-            }
-
-            generateTradingSignal(kalmanStates, currentPrice) {
-                const signalProbs = this.calculateSignalProbability(kalmanStates);
-                const weights = { '1min': 0.1, '5min': 0.15, '15min': 0.2, '1hr': 0.25, '4hr': 0.3 };
-                
-                let weightedBullProb = 0;
-                let weightedBearProb = 0;
-                const timeframeAlignment = {};
-                
-                for (const [timeframe, probData] of Object.entries(signalProbs)) {
-                    if (weights[timeframe]) {
-                        const weight = weights[timeframe];
-                        weightedBullProb += probData.bull_prob * weight;
-                        weightedBearProb += probData.bear_prob * weight;
-                        
-                        if (probData.bull_prob > 0.6) {
-                            timeframeAlignment[timeframe] = 'BULLISH';
-                        } else if (probData.bear_prob > 0.6) {
-                            timeframeAlignment[timeframe] = 'BEARISH';
-                        } else {
-                            timeframeAlignment[timeframe] = 'NEUTRAL';
-                        }
-                    }
-                }
-                
-                const confidence = Math.max(weightedBullProb, weightedBearProb) * 100;
-                let signal = 'HOLD';
-                
-                if (weightedBullProb > 0.65) {
-                    signal = 'BUY';
-                } else if (weightedBearProb > 0.65) {
-                    signal = 'SELL';
-                }
-                
-                // Calculate TP/SL levels
-                const avgVolatility = Object.values(kalmanStates)
-                    .filter(s => s.volatility)
-                    .reduce((acc, s) => acc + s.volatility, 0) / Object.keys(kalmanStates).length || 0.01;
-                
-                let tpLevels, slLevel;
-                
-                if (signal === 'BUY') {
-                    tpLevels = [
-                        currentPrice + avgVolatility * 1.5,
-                        currentPrice + avgVolatility * 2.5,
-                        currentPrice + avgVolatility * 4.0
-                    ];
-                    slLevel = currentPrice - avgVolatility * 2.0;
-                } else if (signal === 'SELL') {
-                    tpLevels = [
-                        currentPrice - avgVolatility * 1.5,
-                        currentPrice - avgVolatility * 2.5,
-                        currentPrice - avgVolatility * 4.0
-                    ];
-                    slLevel = currentPrice + avgVolatility * 2.0;
-                } else {
-                    tpLevels = [currentPrice];
-                    slLevel = currentPrice;
-                }
-                
-                const positionSize = Math.min(confidence / 100 * this.riskTolerance, this.riskTolerance);
-                
-                return {
-                    signal,
-                    confidence,
-                    entry_price: currentPrice,
-                    tp_levels: tpLevels,
-                    sl_level: slLevel,
-                    position_size: positionSize,
-                    timeframe_alignment: timeframeAlignment
-                };
-            }
-        }
-
-        class AdvancedTradingSystem {
-            constructor(waveletType = 'db4', processNoise = 1e-5, measurementNoise = 1e-1, riskTolerance = 0.02) {
-                this.wavelet = new WaveletTransform(waveletType);
-                this.kalmanFilters = {};
-                this.wavelet.timeframes.forEach(tf => {
-                    this.kalmanFilters[tf] = new KalmanFilter(processNoise, measurementNoise);
-                });
-                this.bayesian = new BayesianInference(riskTolerance);
-            }
-
-            analyze(priceData) {
-                if (priceData.length < 50) {
-                    throw new Error("Need at least 50 data points for analysis");
-                }
-                
-                // Step 1: Wavelet decomposition
-                const waveletComponents = this.wavelet.decompose(priceData);
-                
-                if (Object.keys(waveletComponents).length === 0) {
-                    throw new Error("Wavelet decomposition failed");
-                }
-                
-                // Step 2: Kalman filtering
-                const kalmanStates = {};
-                for (const timeframe of this.wavelet.timeframes) {
-                    if (waveletComponents[timeframe]) {
-                        let componentData = waveletComponents[timeframe];
-                        if (componentData.length >= priceData.length) {
-                            componentData = componentData.slice(0, priceData.length);
-                        }
-                        kalmanStates[timeframe] = this.kalmanFilters[timeframe].processTimeframe(componentData);
-                    }
-                }
-                
-                // Step 3: Generate signal
-                const currentPrice = priceData[priceData.length - 1];
-                return this.bayesian.generateTradingSignal(kalmanStates, currentPrice);
-            }
-        }
-
-        // Global variables
-        let tradingSystem = new AdvancedTradingSystem();
-        let priceChart;
-        let autoUpdateInterval;
-        let currentData = [];
-
-        // Initialize chart
-        function initializeChart() {
-            const ctx = document.getElementById('priceChart').getContext('2d');
-            priceChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Price',
-                        data: [],
-                        borderColor: '#00ff88',
-                        backgroundColor: 'rgba(0, 255, 136, 0.1)',
-                        tension: 0.4,
-                        fill: true
-                    }]
                 },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            labels: { color: '#e0e0e0' }
-                        }
+                scales: {
+                    x: {
+                        ticks: { color: '#e0e0e0' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
                     },
-                    scales: {
-                        x: {
-                            ticks: { color: '#e0e0e0' },
-                            grid: { color: 'rgba(255, 255, 255, 0.1)' }
-                        },
-                        y: {
-                            ticks: { color: '#e0e0e0' },
-                            grid: { color: 'rgba(255, 255, 255, 0.1)' }
-                        }
+                    y: {
+                        ticks: { color: '#e0e0e0' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
                     }
                 }
+            }
+        });
+    }
+
+    // Analyze symbol using Flask backend
+    async function analyzeSymbol() {
+        const symbol = document.getElementById('symbolSelect').value;
+        const timeframe = document.getElementById('timeframeSelect').value;
+        const riskTolerance = parseFloat(document.getElementById('riskTolerance').value);
+        const waveletType = document.getElementById('waveletType').value;
+
+        updateStatus('Analyzing ' + symbol + '...');
+
+        try {
+            // Call Flask backend for live analysis
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    symbol: symbol,
+                    timeframe: timeframe,
+                    risk_tolerance: riskTolerance,
+                    wavelet_type: waveletType
+                })
             });
-        }
 
-        // Generate sample data (simulating live data)
-        function generateSampleData(symbol, timeframe, points = 100) {
-            const data = [];
-            const labels = [];
-            let basePrice = 1.2000; // Default for EUR/USD
-            
-            // Adjust base price for different symbols
-            if (symbol.includes('JPY')) basePrice = 110.0;
-            else if (symbol.includes('XAU')) basePrice = 2000.0;
-            else if (symbol.includes('BTC')) basePrice = 45000.0;
-            else if (['AAPL', 'MSFT', 'GOOGL'].includes(symbol)) basePrice = 150.0;
-            
-            for (let i = 0; i < points; i++) {
-                const trend = basePrice * (1 + 0.001 * Math.sin(i * 0.1));
-                const noise = (Math.random() - 0.5) * basePrice * 0.02;
-                const price = trend + noise;
-                
-                data.push(price);
-                labels.push(`T-${points - i}`);
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'API error');
             }
-            
-            return { data, labels };
-        }
 
-        // Analyze symbol
-        async function analyzeSymbol() {
-            const symbol = document.getElementById('symbolSelect').value;
-            const timeframe = document.getElementById('timeframeSelect').value;
-            const riskTolerance = parseFloat(document.getElementById('riskTolerance').value);
-            const waveletType = document.getElementById('waveletType').value;
-            
-            updateStatus('Analyzing ' + symbol + '...');
-            
-            try {
-                // Update system parameters
-                tradingSystem = new AdvancedTradingSystem(waveletType, 1e-5, 1e-1, riskTolerance);
-                
-                // Generate sample data (in real app, this would fetch from API)
-                const { data, labels } = generateSampleData(symbol, timeframe, 200);
-                currentData = data;
-                
-                // Update chart
-                priceChart.data.labels = labels.slice(-50);
-                priceChart.data.datasets[0].data = data.slice(-50);
-                priceChart.data.datasets[0].label = symbol;
-                priceChart.update();
-                
-                // Analyze
-                const signal = tradingSystem.analyze(data);
-                
-                // Update UI
-                updateMetrics(data, signal);
-                displaySignal(signal, symbol);
-                updateStatus('Analysis Complete');
-                
-            } catch (error) {
-                console.error('Analysis error:', error);
-                updateStatus('Analysis Failed: ' + error.message);
-            }
-        }
+            const result = await response.json();
 
-        // Update metrics
-        function updateMetrics(data, signal) {
-            const currentPrice = data[data.length - 1];
-            const previousPrice = data[data.length - 2];
-            const priceChange = ((currentPrice - previousPrice) / previousPrice * 100);
-            
-            // Calculate volatility
-            const returns = [];
-            for (let i = 1; i < data.length; i++) {
-                returns.push((data[i] - data[i-1]) / data[i-1]);
-            }
-            const volatility = Math.sqrt(returns.reduce((a, b) => a + b*b, 0) / returns.length) * 100;
-            
-            document.getElementById('currentPrice').textContent = currentPrice.toFixed(4);
-            document.getElementById('priceChange').textContent = priceChange.toFixed(2) + '%';
-            document.getElementById('priceChange').style.color = priceChange >= 0 ? '#00ff88' : '#ff4444';
-            document.getElementById('volatility').textContent = volatility.toFixed(2) + '%';
-            document.getElementById('volume').textContent = Math.floor(Math.random() * 1000000).toLocaleString();
-        }
+            // Update chart with real historical data
+            const data = result.historical_data;
+            const labels = Array.from({length: data.length}, (_, i) => `T-${data.length - i}`);
+            priceChart.data.labels = labels.slice(-50);
+            priceChart.data.datasets[0].data = data.slice(-50);
+            priceChart.data.datasets[0].label = symbol;
+            priceChart.update();
 
-        // Display signal
-        function displaySignal(signal, symbol) {
-            const container = document.getElementById('signalContainer');
-            const signalClass = `signal-${signal.signal.toLowerCase()}`;
-            
-            container.innerHTML = `
-                <div class="signal-card ${signalClass}">
-                    <h4>🎯 ${signal.signal} ${symbol}</h4>
-                    <p><strong>Confidence:</strong> ${signal.confidence.toFixed(1)}%</p>
-                    <p><strong>Entry:</strong> ${signal.entry_price.toFixed(4)}</p>
-                    <p><strong>Stop Loss:</strong> ${signal.sl_level.toFixed(4)}</p>
-                    <p><strong>Take Profits:</strong></p>
-                    <ul>
-                        ${signal.tp_levels.map((tp, i) => `<li>TP${i+1}: ${tp.toFixed(4)}</li>`).join('')}
-                    </ul>
-                    <p><strong>Position Size:</strong> ${(signal.position_size * 100).toFixed(2)}%</p>
+            // Update UI with real signal
+            updateMetrics(data, result.signal);
+            displaySignal(result.signal, symbol);
+            updateStatus('Analysis Complete');
+        } catch (error) {
+            console.error('Analysis error:', error);
+            updateStatus('Analysis Failed: ' + error.message);
+        }
+    }
+
+    // Update metrics
+    function updateMetrics(data, signal) {
+        const currentPrice = data[data.length - 1];
+        const previousPrice = data[data.length - 2];
+        const priceChange = ((currentPrice - previousPrice) / previousPrice * 100);
+
+        // Calculate volatility
+        const returns = [];
+        for (let i = 1; i < data.length; i++) {
+            returns.push((data[i] - data[i-1]) / data[i-1]);
+        }
+        const volatility = Math.sqrt(returns.reduce((a, b) => a + b*b, 0) / returns.length) * 100;
+
+        document.getElementById('currentPrice').textContent = currentPrice.toFixed(4);
+        document.getElementById('priceChange').textContent = priceChange.toFixed(2) + '%';
+        document.getElementById('priceChange').style.color = priceChange >= 0 ? '#00ff88' : '#ff4444';
+        document.getElementById('volatility').textContent = volatility.toFixed(2) + '%';
+        document.getElementById('volume').textContent = (result.current_data?.volume || 0).toLocaleString();
+    }
+
+    // Display trading signal
+    function displaySignal(signal, symbol) {
+        const container = document.getElementById('signalContainer');
+        const signalClass = `signal-${signal.signal.toLowerCase()}`;
+        container.innerHTML = `
+            <div class="signal-card ${signalClass}">
+                <h4>🎯 ${signal.signal} ${symbol}</h4>
+                <p><strong>Confidence:</strong> ${signal.confidence.toFixed(1)}%</p>
+                <p><strong>Entry:</strong> ${signal.entry_price.toFixed(4)}</p>
+                <p><strong>Stop Loss:</strong> ${signal.sl_level.toFixed(4)}</p>
+                <p><strong>Take Profits:</strong></p>
+                <ul>
+                    ${signal.tp_levels.map((tp, i) => `<li>TP${i+1}: ${tp.toFixed(4)}</li>`).join('')}
+                </ul>
+                <p><strong>Position Size:</strong> ${(signal.position_size * 100).toFixed(2)}%</p>
+            </div>
+            <div class="signal-card">
+                <h4>📊 Timeframe Analysis</h4>
+                <div class="timeframe-grid">
+                    ${Object.entries(signal.timeframe_alignment).map(([tf, status]) =>
+                        `<div class="timeframe-item ${status.toLowerCase()}">${tf}: ${status}</div>`
+                    ).join('')}
                 </div>
-                
-                <div class="signal-card">
-                    <h4>📊 Timeframe Analysis</h4>
-                    <div class="timeframe-grid">
-                        ${Object.entries(signal.timeframe_alignment).map(([tf, status]) => 
-                            `<div class="timeframe-item ${status.toLowerCase()}">${tf}: ${status}</div>`
-                        ).join('')}
-                    </div>
-                </div>
-            `;
+            </div>
+        `;
+    }
+
+    // Auto update (calls analyzeSymbol)
+    function startAutoUpdate() {
+        if (autoUpdateInterval) clearInterval(autoUpdateInterval);
+        autoUpdateInterval = setInterval(analyzeSymbol, 30000); // every 30 seconds
+        updateStatus('Auto-update started (30s intervals)');
+    }
+
+    function stopAutoUpdate() {
+        if (autoUpdateInterval) {
+            clearInterval(autoUpdateInterval);
+            autoUpdateInterval = null;
+            updateStatus('Auto-update stopped');
         }
+    }
 
-        // Auto update functions
-       // Auto update functions
-        function startAutoUpdate() {
-            if (autoUpdateInterval) clearInterval(autoUpdateInterval);
-            
-            autoUpdateInterval = setInterval(() => {
-                analyzeSymbol();
-            }, 30000); // Update every 30 seconds
-            
-            updateStatus('Auto-update started (30s intervals)');
-        }
+    // Update status function
+    function updateStatus(message) {
+        const statusEl = document.getElementById('status');
+        statusEl.innerHTML = message.includes('...') ?
+            `<span class="loading"></span> ${message}` : message;
+    }
 
-        function stopAutoUpdate() {
-            if (autoUpdateInterval) {
-                clearInterval(autoUpdateInterval);
-                autoUpdateInterval = null;
-                updateStatus('Auto-update stopped');
-            }
-        }
+    // Risk tolerance slider update
+    document.getElementById('riskTolerance').addEventListener('input', function() {
+        document.getElementById('riskValue').textContent = (this.value * 100).toFixed(0) + '%';
+    });
 
-        // Update status function
-        function updateStatus(message) {
-            const statusEl = document.getElementById('status');
-            statusEl.innerHTML = message.includes('...') ? 
-                `<span class="loading"></span> ${message}` : message;
-        }
-
-        // Risk tolerance slider update
-        document.getElementById('riskTolerance').addEventListener('input', function() {
-            document.getElementById('riskValue').textContent = (this.value * 100).toFixed(0) + '%';
-        });
-
-        // Initialize on page load
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeChart();
-            updateStatus('System Ready - Select symbol and analyze');
-        });
-    </script>
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeChart();
+        updateStatus('System Ready - Select symbol and analyze');
+    });
+</script>
 </body>
 </html>
