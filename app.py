@@ -736,7 +736,7 @@ def background_updater():
             logger.error(f"Background update error: {e}")
             time.sleep(60)  # Wait 1 minute before retry
 
-if __name__ == '__main__':
+if __name__ == '__app__':
     # Start background updater
     updater_thread = threading.Thread(target=background_updater, daemon=True)
     updater_thread.start()
