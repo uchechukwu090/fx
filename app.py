@@ -281,56 +281,110 @@ class AdvancedTradingSystem:
         
         return trading_signal
 
-class FinnhubDataProvider:
-    def __init__(self, api_key=None):
-        self.api_key = api_key or config.FINNHUB_API_KEY
-        self.base_url = 'https://finnhub.io/api/v1'
+class TwelveDataProvider:
+    def __init__(self, api_key='fef3c30aa26c4831924fdb142f87550d'):
+        self.api_key = api_key
+        self.base_url = 'https://api.twelvedata.com'
         self.session = requests.Session()
-        self.session.headers.update({
-            'X-Finnhub-Token': self.api_key
-        })
+        
+        # Symbol mapping for common trading pairs and assets
+        self.symbol_mapping = {
+            'EURUSD': 'EUR/USD',
+            'GBPUSD': 'GBP/USD', 
+            'USDJPY': 'USD/JPY',
+            'USDCHF': 'USD/CHF',
+            'AUDUSD': 'AUD/USD',
+            'USDCAD': 'USD/CAD',
+            'NZDUSD': 'NZD/USD',
+            'EURJPY': 'EUR/JPY',
+            'GBPJPY': 'GBP/JPY',
+            'EURGBP': 'EUR/GBP',
+            'XAUUSD': 'XAU/USD',
+            'XAGUSD': 'XAG/USD',
+            'BTCUSD': 'BTC/USD',
+            'ETHUSD': 'ETH/USD',
+            'BTC-USD': 'BTC/USD',
+            'ETH-USD': 'ETH/USD'
+        }
+
+    def get_twelve_data_symbol(self, symbol: str) -> str:
+        """Convert common symbol formats to Twelve Data format"""
+        # Remove common suffixes/prefixes
+        symbol = symbol.upper().replace('-USD', 'USD').replace('_USD', 'USD')
+        
+        # Check mapping first
+        if symbol in self.symbol_mapping:
+            return self.symbol_mapping[symbol]
+        
+        # For forex pairs, add slash if it's 6 characters
+        if len(symbol) == 6 and symbol.isalpha():
+            return f"{symbol[:3]}/{symbol[3:]}"
+        
+        # For stocks, keep as is
+        return symbol
 
     def get_current_price(self, symbol: str) -> Dict:
         """Get current price for any symbol"""
         try:
-            # First, search for the symbol to get the correct format
-            search_url = f"{self.base_url}/search"
-            search_params = {'q': symbol}
+            twelve_data_symbol = self.get_twelve_data_symbol(symbol)
             
-            search_response = self.session.get(search_url, params=search_params, timeout=config.API_TIMEOUT)
-            search_response.raise_for_status()
-            search_data = search_response.json()
+            # Get real-time price
+            quote_url = f"{self.base_url}/price"
+            quote_params = {
+                'symbol': twelve_data_symbol,
+                'apikey': self.api_key
+            }
             
-            # Use the first result or the original symbol
-            finnhub_symbol = symbol
-            if search_data.get('result') and len(search_data['result']) > 0:
-                finnhub_symbol = search_data['result'][0]['symbol']
-            
-            # Get quote data
-            quote_url = f"{self.base_url}/quote"
-            quote_params = {'symbol': finnhub_symbol}
-            
-            quote_response = self.session.get(quote_url, params=quote_params, timeout=config.API_TIMEOUT)
+            quote_response = self.session.get(quote_url, params=quote_params, timeout=10)
             quote_response.raise_for_status()
             quote_data = quote_response.json()
             
-            current_price = quote_data.get('c', 0)  # Current price
-            previous_close = quote_data.get('pc', current_price)  # Previous close
+            if 'price' not in quote_data:
+                raise ValueError(f"No price data returned for {symbol}")
+            
+            current_price = float(quote_data['price'])
+            
+            # Get additional quote data for more context
+            quote_detail_url = f"{self.base_url}/quote"
+            quote_detail_params = {
+                'symbol': twelve_data_symbol,
+                'apikey': self.api_key
+            }
+            
+            try:
+                detail_response = self.session.get(quote_detail_url, params=quote_detail_params, timeout=10)
+                detail_response.raise_for_status()
+                detail_data = detail_response.json()
+                
+                previous_close = float(detail_data.get('previous_close', current_price))
+                high = float(detail_data.get('high', current_price))
+                low = float(detail_data.get('low', current_price))
+                open_price = float(detail_data.get('open', current_price))
+                volume = int(detail_data.get('volume', 0))
+                
+            except:
+                # Fallback values if detailed quote fails
+                previous_close = current_price
+                high = current_price
+                low = current_price
+                open_price = current_price
+                volume = 0
+            
             change = current_price - previous_close
             change_percent = (change / previous_close * 100) if previous_close != 0 else 0
             
             return {
                 'symbol': symbol,
-                'finnhub_symbol': finnhub_symbol,
+                'twelve_data_symbol': twelve_data_symbol,
                 'price': current_price,
                 'change': change,
                 'change_percent': change_percent,
-                'high': quote_data.get('h', current_price),
-                'low': quote_data.get('l', current_price),
-                'open': quote_data.get('o', current_price),
+                'high': high,
+                'low': low,
+                'open': open_price,
                 'previous_close': previous_close,
                 'timestamp': datetime.now().isoformat(),
-                'volume': quote_data.get('v', 0)
+                'volume': volume
             }
             
         except Exception as e:
@@ -352,43 +406,29 @@ class FinnhubDataProvider:
         days = min(days, config.MAX_HISTORICAL_DAYS)
         
         try:
-            # First search for the symbol
-            search_url = f"{self.base_url}/search"
-            search_params = {'q': symbol}
+            twelve_data_symbol = self.get_twelve_data_symbol(symbol)
             
-            search_response = self.session.get(search_url, params=search_params, timeout=config.API_TIMEOUT)
-            search_response.raise_for_status()
-            search_data = search_response.json()
-            
-            # Use the first result or the original symbol
-            finnhub_symbol = symbol
-            if search_data.get('result') and len(search_data['result']) > 0:
-                finnhub_symbol = search_data['result'][0]['symbol']
-            
-            # Calculate date range
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            
-            # Get candle data (daily)
-            candle_url = f"{self.base_url}/stock/candle"
-            candle_params = {
-                'symbol': finnhub_symbol,
-                'resolution': 'D',  # Daily resolution
-                'from': int(start_date.timestamp()),
-                'to': int(end_date.timestamp())
+            # Get time series data
+            ts_url = f"{self.base_url}/time_series"
+            ts_params = {
+                'symbol': twelve_data_symbol,
+                'interval': '1day',
+                'outputsize': str(days),
+                'apikey': self.api_key
             }
             
-            candle_response = self.session.get(candle_url, params=candle_params, timeout=config.API_TIMEOUT)
-            candle_response.raise_for_status()
-            candle_data = candle_response.json()
+            ts_response = self.session.get(ts_url, params=ts_params, timeout=15)
+            ts_response.raise_for_status()
+            ts_data = ts_response.json()
             
-            if candle_data.get('s') == 'ok' and candle_data.get('c'):
-                # Return closing prices
-                return candle_data['c']
+            if 'values' in ts_data and ts_data['values']:
+                # Extract closing prices and reverse order (oldest to newest)
+                prices = [float(item['close']) for item in reversed(ts_data['values'])]
+                return prices
             else:
                 # Fallback: generate realistic sample data based on current price
                 current_data = self.get_current_price(symbol)
-                base_price = current_data['price'] if current_data['price'] > 0 else 100
+                base_price = current_data['price'] if current_data['price'] > 0 else 1.0
                 
                 prices = []
                 current_price = base_price
@@ -401,24 +441,30 @@ class FinnhubDataProvider:
                     current_price *= (1 + change_percent + trend)
                     prices.append(current_price)
                 
-                return prices[::-1]  # Reverse to get chronological order
+                return prices
                 
         except Exception as e:
             logger.error(f"Error getting historical data for {symbol}: {e}")
             # Fallback data
-            return [100 + i + np.random.normal(0, 2) for i in range(days)]
+            return [1.0 + i * 0.01 + np.random.normal(0, 0.02) for i in range(days)]
 
     def search_symbol(self, query: str) -> List[Dict]:
         """Search for symbols"""
         try:
-            search_url = f"{self.base_url}/search"
-            search_params = {'q': query}
+            search_url = f"{self.base_url}/symbol_search"
+            search_params = {
+                'symbol': query,
+                'apikey': self.api_key
+            }
             
-            response = self.session.get(search_url, params=search_params, timeout=config.API_TIMEOUT)
+            response = self.session.get(search_url, params=search_params, timeout=10)
             response.raise_for_status()
             data = response.json()
             
-            return data.get('result', [])
+            if 'data' in data:
+                return data['data']
+            else:
+                return []
             
         except Exception as e:
             logger.error(f"Error searching for {query}: {e}")
@@ -515,7 +561,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Global instances
-data_provider = FinnhubDataProvider()
+data_provider = TwelveDataProvider()
 db_manager = DatabaseManager()
 trading_systems = {}  # Cache for trading systems with different parameters
 
@@ -657,14 +703,8 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'version': '2.0.0',
-        'data_provider': 'Finnhub'
+        'data_provider': 'Twelve Data'
     })
-@app.route('/webhook/finnhub', methods=['POST'])
-def finnhub_webhook():
-    secret = request.headers.get('X-Finnhub-Secret')
-    if secret != 'd1e5t6hr01qlt46sr0k0':
-        return "Forbidden", 403
-    return "ok", 200  # acknowledge immediately
 
 @app.route('/', methods=['GET'])
 def home():
@@ -672,8 +712,9 @@ def home():
 
 # Background task for periodic updates
 def background_updater():
-    """Background task to update prices periodically"""
-    symbols = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'AMZN', 'NVDA', 'META', 'BTC-USD', 'ETH-USD']
+    """Background task to update prices periodically - optimized for free tier"""
+    # Reduced to 3 symbols to stay within free tier limits
+    symbols = ['EUR/USD', 'XAU/USD', 'USD/JPY']  # Using proper Twelve Data format
     
     while True:
         try:
@@ -681,21 +722,25 @@ def background_updater():
                 try:
                     price_data = data_provider.get_current_price(symbol)
                     db_manager.save_price_data(price_data)
-                    time.sleep(2)  # Rate limiting for API calls
+                    logger.info(f"Updated price for {symbol}: {price_data['price']}")
+                    time.sleep(5)  # 5 second delay between API calls for rate limiting
                 except Exception as e:
                     logger.error(f"Error updating {symbol}: {e}")
                     continue
             
-            time.sleep(300)  # Update every 5 minutes
+            # Update every 9 minutes to stay within API limits
+            logger.info("Background update cycle completed, waiting 9 minutes...")
+            time.sleep(540)  # 9 minutes = 540 seconds
             
         except Exception as e:
             logger.error(f"Background update error: {e}")
-            time.sleep(60)  # Wait before retry
+            time.sleep(60)  # Wait 1 minute before retry
 
-if __name__ == '__app__':
+if __name__ == '__main__':
     # Start background updater
     updater_thread = threading.Thread(target=background_updater, daemon=True)
     updater_thread.start()
+    logger.info("Background updater started with 9-minute intervals")
     
     # Get port from environment variable (Render requirement)
     port = int(os.environ.get('PORT', 5000))
