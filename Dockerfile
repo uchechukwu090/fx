@@ -4,11 +4,10 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Set environment variables
+# Set environment variables (let docker-compose.yml handle overrides)
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=app.py
-ENV FLASK_ENV=production
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -19,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     liblapack-dev \
     libblas-dev \
     libffi-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -31,18 +31,18 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application code
 COPY . .
 
-# Create directories for data persistence
+# Create directory for persistent data
 RUN mkdir -p /app/data
 
-# Set permissions
-RUN chmod +x /app
+# Set permissions (optional: safer to manage on host, but okay for containers)
+RUN chmod -R 755 /app/data
 
-# Expose port
-EXPOSE $PORT
+# Expose port (use 5000, not $PORT, for Docker compatibility)
+EXPOSE 5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:$PORT/api/health || exit 1
+# Health check (use fixed port for Docker healthcheck)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:5000/api/health || exit 1
 
 # Run the application with gunicorn
-CMD gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --worker-class sync app:app
+CMD gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 120 --worker-class sync app:app
