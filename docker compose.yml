@@ -1,5 +1,4 @@
 version: '3.8'
-
 services:
   trading-bot:
     build: .
@@ -8,13 +7,18 @@ services:
     environment:
       - FLASK_ENV=production
       - PORT=5000
-      - FINNHUB_API_KEY=${FINNHUB_API_KEY:-d1e5t6hr01qlt46sr0igd1e5t6hr01qlt46sr0j0}
+      - TWELVE_DATA_API_KEY=${TWELVE_DATA_API_KEY:-fef3c30aa26c4831924fdb142f87550d}
+      - TWELVE_DATA_BASE_URL=${TWELVE_DATA_BASE_URL:-https://api.twelvedata.com/v1}
       - DATABASE_PATH=${DATABASE_PATH:-/app/data/trading_bot.db}
       - RISK_TOLERANCE=${RISK_TOLERANCE:-0.02}
       - WAVELET_TYPE=${WAVELET_TYPE:-db4}
       - PROCESS_NOISE=${PROCESS_NOISE:-1e-5}
       - MEASUREMENT_NOISE=${MEASUREMENT_NOISE:-1e-1}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - API_RATE_LIMIT=${API_RATE_LIMIT:-8}
+      - API_TIMEOUT=${API_TIMEOUT:-10}
+      - UPDATE_INTERVAL=${UPDATE_INTERVAL:-540}
+      - CACHE_TIMEOUT=${CACHE_TIMEOUT:-60}
     volumes:
       - trading_data:/app/data
     restart: unless-stopped
