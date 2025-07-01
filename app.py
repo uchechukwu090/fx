@@ -1370,7 +1370,7 @@ def register():
 def login():
     try:
         data = request.json
-        username = data.get('username', '').strip()
+        username = data.get('email', '').strip()
         password = data.get('password', '')
         
         if not username or not password:
