@@ -1670,7 +1670,7 @@ def health_check():
 @app.route('/', methods=['GET'])
 def home():
     if 'auth.html' in request.path or not session.get('session_token'):
-        return render_template('auth.html')
+        return render_template(''index.html'')
     return render_template('index.html')
 
 def background_updater():
