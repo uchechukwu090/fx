@@ -1667,11 +1667,9 @@ def health_check():
         'data_provider': 'Twelve Data'
     })
 
-@app.route('/', methods=['GET'])
+@app.route("/", methods=["GET"])
 def home():
-    if 'auth.html' in request.path or not session.get('session_token'):
-        return render_template(''index.html'')
-    return render_template('index.html')
+    return render_template("index.html")
 
 def background_updater():
     """Background process to update prices and send notifications for watchlisted symbols"""
