@@ -1669,7 +1669,7 @@ def health_check():
 
 @app.route("/", methods=["GET"])
 def home():
-    return render_template("index.html")
+    return render_template('index.html')
 
 def background_updater():
     """Background process to update prices and send notifications for watchlisted symbols"""
