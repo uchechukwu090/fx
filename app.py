@@ -1769,7 +1769,7 @@ def background_updater():
             logger.error(f"Background update error: {e}")
             time.sleep(60)
 
-if __name__ == '__app__':
+if __name__ == '__main__':
     # Start background updater
     updater_thread = threading.Thread(target=background_updater, daemon=True)
     updater_thread.start()
