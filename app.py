@@ -1346,12 +1346,16 @@ def register():
         username = data.get('username', '').strip()
         email = data.get('email', '').strip()
         password = data.get('password', '')
+        confirm_password = data.get('confirm_password', '')  # <-- NEW
         first_name = data.get('first_name', '').strip()
         last_name = data.get('last_name', '').strip()
         
         if not username or not email or not password:
             return jsonify({'error': 'Username, email, and password are required'}), 400
-        
+
+        if password != confirm_password:
+            return jsonify({'error': 'Passwords do not match'}), 400  # <-- NEW
+
         if len(password) < 6:
             return jsonify({'error': 'Password must be at least 6 characters long'}), 400
         
@@ -1372,11 +1376,12 @@ def login():
         data = request.json
         username = data.get('username', '').strip()
         password = data.get('password', '')
+        email = data.get('email', '').strip()
         
-        if not username or not password:
+        if not username or not email or not password:
             return jsonify({'error': 'Username and password are required'}), 400
         
-        result = db_manager.authenticate_user(username, password)
+        result = db_manager.authenticate_user(username, email, password)
         
         if result['success']:
             session_token = db_manager.create_session(result['user']['id'])
