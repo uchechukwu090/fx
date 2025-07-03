@@ -558,38 +558,42 @@
     </div>
 
     <!-- Register Modal -->
-    <div class="modal" id="registerModal">
-        <div class="modal-content">
-            <span class="close" onclick="hideModal('registerModal')">&times;</span>
-            <h2>Sign Up</h2>
-            <form id="registerForm">
-                <div class="form-group">
-                    <label for="firstName">First Name (Optional)</label>
-                    <input type="text" id="firstName">
-                </div>
-                <div class="form-group">
-                    <label for="lastName">Last Name (Optional)</label>
-                    <input type="text" id="lastName">
-                </div>
-                <div class="form-group">
-                    <label for="registerEmail">Email</label>
-                    <input type="email" id="registerEmail" required>
-                </div>
-                <div class="form-group">
-                    <label for="registerPassword">Password</label>
-                    <input type="password" id="registerPassword" required>
-                </div>
-                <div class="form-group">
-                    <label for="confirmPassword">Confirm Password</label>
-                    <input type="password" id="confirmPassword" required>
-                </div>
-                <button type="submit" class="btn-submit">Sign Up</button>
-            </form>
-            <p style="text-align: center; margin-top: 1rem;">
-                Already have an account? <a href="#" onclick="hideModal('registerModal'); showModal('loginModal');">Login</a>
-            </p>
-        </div>
+<div class="modal" id="registerModal">
+    <div class="modal-content">
+        <span class="close" onclick="hideModal('registerModal')">&times;</span>
+        <h2>Sign Up</h2>
+        <form id="registerForm">
+            <div class="form-group">
+                <label for="registerUsername">Username</label>
+                <input type="text" id="registerUsername" required>
+            </div>
+            <div class="form-group">
+                <label for="firstName">First Name (Optional)</label>
+                <input type="text" id="firstName">
+            </div>
+            <div class="form-group">
+                <label for="lastName">Last Name (Optional)</label>
+                <input type="text" id="lastName">
+            </div>
+            <div class="form-group">
+                <label for="registerEmail">Email</label>
+                <input type="email" id="registerEmail" required>
+            </div>
+            <div class="form-group">
+                <label for="registerPassword">Password</label>
+                <input type="password" id="registerPassword" required>
+            </div>
+            <div class="form-group">
+                <label for="confirmPassword">Confirm Password</label>
+                <input type="password" id="confirmPassword" required>
+            </div>
+            <button type="submit" class="btn-submit">Sign Up</button>
+        </form>
+        <p style="text-align: center; margin-top: 1rem;">
+            Already have an account? <a href="#" onclick="hideModal('registerModal'); showModal('loginModal');">Login</a>
+        </p>
     </div>
+</div>
 
     <!-- TradingView Script -->
     <script src="https://s3.tradingview.com/tv.js"></script>
