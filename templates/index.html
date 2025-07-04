@@ -683,12 +683,14 @@
 
         document.getElementById('registerForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const firstName = document.getElementById('firstName').value;
-            const lastName = document.getElementById('lastName').value;
-            const email = document.getElementById('registerEmail').value;
-            const password = document.getElementById('registerPassword').value;
-            const confirmPassword = document.getElementById('confirmPassword').value;
+    const username = document.getElementById('registerUsername').value;
+    const firstName = document.getElementById('firstName').value;
+    const lastName = document.getElementById('lastName').value;
+    const email = document.getElementById('registerEmail').value;
+    const password = document.getElementById('registerPassword').value;
+    const confirmPassword = document.getElementById('confirmPassword').value;
 
+});
             if (password !== confirmPassword) {
                 alert('Passwords do not match!');
                 return;
