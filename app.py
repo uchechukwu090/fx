@@ -23,8 +23,59 @@ from email.mime.multipart import MIMEMultipart
 import hashlib
 import secrets
 from config import config
+import uuid
 
 warnings.filterwarnings('ignore')
+
+# --- New Classes for Caching and Rate Limiting ---
+
+class CacheManager:
+    """In-memory cache with Time-To-Live (TTL) support."""
+    def __init__(self, default_ttl_seconds=60):
+        self.cache = {}
+        self.default_ttl = timedelta(seconds=default_ttl_seconds)
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        with self.lock:
+            if key in self.cache:
+                value, expiry = self.cache[key]
+                if datetime.now() < expiry:
+                    return value
+                else:
+                    # Expired item, remove it
+                    del self.cache[key]
+            return None
+
+    def set(self, key, value, ttl_seconds=None):
+        with self.lock:
+            ttl = timedelta(seconds=ttl_seconds) if ttl_seconds else self.default_ttl
+            expiry = datetime.now() + ttl
+            self.cache[key] = (value, expiry)
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+
+class RateLimiter:
+    """Simple per-minute rate limiter."""
+    def __init__(self, max_calls_per_minute=10):
+        self.max_calls = max_calls_per_minute
+        self.call_log = []
+        self.lock = threading.Lock()
+
+    def is_allowed(self):
+        with self.lock:
+            now = datetime.now()
+            one_minute_ago = now - timedelta(minutes=1)
+            
+            # Remove calls older than one minute
+            self.call_log = [t for t in self.call_log if t > one_minute_ago]
+            
+            if len(self.call_log) < self.max_calls:
+                self.call_log.append(now)
+                return True
+            return False
 
 # Replace your existing to_scalar function with this:
 def to_scalar(x):
@@ -115,6 +166,37 @@ class EnhancedTradingSignal:
     dynamic_sl_level: PredictionLevel
     
     timestamp: str = ""
+
+@dataclass
+class SimulatedOrder:
+    """Represents a simulated trading order"""
+    order_id: str
+    user_id: int
+    symbol: str
+    order_type: str  # 'BUY', 'SELL'
+    quantity: float
+    entry_price: float
+    current_price: float
+    tp_level: Optional[float] = None
+    sl_level: Optional[float] = None
+    status: str = 'OPEN'  # 'OPEN', 'CLOSED', 'TP_HIT', 'SL_HIT'
+    pnl: float = 0.0
+    pnl_percent: float = 0.0
+    created_at: str = ""
+    closed_at: Optional[str] = None
+    close_reason: Optional[str] = None
+
+@dataclass
+class Portfolio:
+    """User's trading portfolio"""
+    user_id: int
+    cash_balance: float
+    total_equity: float
+    open_positions: List[SimulatedOrder]
+    total_pnl: float
+    total_pnl_percent: float
+    margin_used: float
+    free_margin: float
 
 class PredictiveEngine:
     """Handles price prediction using multiple timeframe analysis"""
@@ -272,10 +354,12 @@ class KellyCriterionCalculator:
         self.max_risk_per_trade = max_risk_per_trade  # 2% max risk per trade
     
     def calculate_kelly_position(self, predictions: List[PredictionLevel], 
-                               entry_price: float, stop_loss: float) -> KellyPositioning:
-        """Calculate Kelly optimal position size"""
+                               entry_price: float, stop_loss: float, risk_tolerance: float) -> KellyPositioning:
+        """
+        Calculate Kelly optimal position size, strictly enforcing risk_tolerance.
+        """
         
-        if not predictions:
+        if not predictions or entry_price <= 0 or stop_loss <= 0:
             return KellyPositioning(0, 0, 0.5, 1, 0)
         
         # Calculate expected returns and probabilities
@@ -283,6 +367,9 @@ class KellyCriterionCalculator:
         total_probability = 0
         risk_per_unit = abs(entry_price - stop_loss) / entry_price
         
+        if risk_per_unit == 0:
+             return KellyPositioning(0, 0, 0.5, 1, 0)
+
         win_scenarios = []
         loss_scenarios = []
         
@@ -323,8 +410,10 @@ class KellyCriterionCalculator:
         # Apply Kelly fraction but cap it for risk management
         kelly_fraction = max(0, min(kelly_fraction, 0.25))  # Cap at 25%
         
-        # Further limit by maximum risk per trade
-        max_position_by_risk = self.max_risk_per_trade / risk_per_unit if risk_per_unit > 0 else 0
+        # Position size based on risk tolerance
+        max_position_by_risk = risk_tolerance / risk_per_unit
+
+        # The final position size is the minimum of the Kelly fraction and the risk-tolerance-based size.
         optimal_position = min(kelly_fraction, max_position_by_risk)
         
         return KellyPositioning(
@@ -521,7 +610,7 @@ class EnhancedBayesianInference:
         self.kelly_calculator = KellyCriterionCalculator(risk_tolerance)
         self.prior_bull = 0.5
     
-    def generate_enhanced_signal(self, kalman_states: Dict, current_price: float) -> EnhancedTradingSignal:
+    def generate_enhanced_signal(self, kalman_states: Dict, current_price: float, user_risk_tolerance: float) -> EnhancedTradingSignal:
         """Generate enhanced trading signal with predictions and Kelly sizing"""
         
         # Generate timeframe predictions
@@ -578,9 +667,9 @@ class EnhancedBayesianInference:
             confidence_interval=(sl_price * 0.99, sl_price * 1.01)
         )
         
-        # Calculate Kelly position sizing
+        # Calculate Kelly position sizing, ensuring risk_tolerance is enforced
         kelly_positioning = self.kelly_calculator.calculate_kelly_position(
-            dynamic_tp_levels, current_price, sl_price
+            dynamic_tp_levels, current_price, sl_price, user_risk_tolerance
         )
         
         return EnhancedTradingSignal(
@@ -617,7 +706,7 @@ class AdvancedTradingSystem:
         trading_signal = self.bayesian.generate_trading_signal(kalman_states, current_price)
         return trading_signal
 
-    def analyze_enhanced(self, price_data: np.array) -> EnhancedTradingSignal:
+    def analyze_enhanced(self, price_data: np.array, user_risk_tolerance: float) -> EnhancedTradingSignal:
         """Enhanced analysis returning predictive signals"""
         if len(price_data) < 50:  # Minimum data points
             raise ValueError("Need at least 50 data points for enhanced analysis")
@@ -637,15 +726,17 @@ class AdvancedTradingSystem:
         current_price = to_scalar(price_data[-1])
         
         # Generate enhanced signal
-        enhanced_signal = self.enhanced_bayesian.generate_enhanced_signal(kalman_states, current_price)
+        enhanced_signal = self.enhanced_bayesian.generate_enhanced_signal(kalman_states, current_price, user_risk_tolerance)
         
         return enhanced_signal
 
 class TwelveDataProvider:
-    def __init__(self, api_key='fef3c30aa26c4831924fdb142f87550d'):
+    def __init__(self, api_key='fef3c30aa26c4831924fdb142f87550d', cache_manager=None, rate_limiter=None):
         self.api_key = api_key
         self.base_url = 'https://api.twelvedata.com'
         self.session = requests.Session()
+        self.cache = cache_manager or CacheManager()
+        self.rate_limiter = rate_limiter or RateLimiter()
         self.symbol_mapping = {
             'EURUSD': 'EUR/USD',
             'GBPUSD': 'GBP/USD',
@@ -674,6 +765,15 @@ class TwelveDataProvider:
         return symbol
 
     def get_current_price(self, symbol: str) -> Dict:
+        cache_key = f"price_{symbol}"
+        cached_data = self.cache.get(cache_key)
+        if cached_data:
+            return cached_data
+
+        if not self.rate_limiter.is_allowed():
+            logger.warning(f"Rate limit exceeded for price data. Symbol: {symbol}")
+            return {'error': 'Rate limit exceeded. Please try again later.'}
+
         try:
             twelve_data_symbol = self.get_twelve_data_symbol(symbol)
             quote_url = f"{self.base_url}/price"
@@ -703,7 +803,8 @@ class TwelveDataProvider:
                 volume = 0
             change = current_price - previous_close
             change_percent = (change / previous_close * 100) if previous_close != 0 else 0
-            return {
+            
+            result = {
                 'symbol': symbol,
                 'twelve_data_symbol': twelve_data_symbol,
                 'price': current_price,
@@ -716,6 +817,8 @@ class TwelveDataProvider:
                 'timestamp': datetime.now().isoformat(),
                 'volume': volume
             }
+            self.cache.set(cache_key, result, ttl_seconds=30) # Cache for 30 seconds
+            return result
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
             return {
@@ -732,6 +835,16 @@ class TwelveDataProvider:
         if days is None:
             days = config.DEFAULT_HISTORICAL_DAYS
         days = min(days, config.MAX_HISTORICAL_DAYS)
+
+        cache_key = f"historical_{symbol}_{days}"
+        cached_data = self.cache.get(cache_key)
+        if cached_data:
+            return cached_data
+
+        if not self.rate_limiter.is_allowed():
+            logger.warning(f"Rate limit exceeded for historical data. Symbol: {symbol}")
+            return []
+
         try:
             twelve_data_symbol = self.get_twelve_data_symbol(symbol)
             ts_url = f"{self.base_url}/time_series"
@@ -746,6 +859,7 @@ class TwelveDataProvider:
             ts_data = ts_response.json()
             if 'values' in ts_data and ts_data['values']:
                 prices = [to_scalar(item['close']) for item in reversed(ts_data['values'])]
+                self.cache.set(cache_key, prices, ttl_seconds=3600) # Cache for 1 hour
                 return prices
             else:
                 current_data = self.get_current_price(symbol)
@@ -776,6 +890,259 @@ class TwelveDataProvider:
         except Exception as e:
             logger.error(f"Error searching for {query}: {e}")
             return []
+
+class TradingSimulator:
+    """Handles trading simulation logic including position management and P&L calculation"""
+    
+    def __init__(self, db_manager, data_provider):
+        self.db_manager = db_manager
+        self.data_provider = data_provider
+        self.order_close_lock = threading.Lock()
+    
+    def calculate_position_value(self, order: SimulatedOrder, current_price: float) -> Dict:
+        """Calculate current value and P&L for a position"""
+        if order.order_type == 'BUY':
+            pnl = (current_price - order.entry_price) * order.quantity
+            pnl_percent = ((current_price - order.entry_price) / order.entry_price) * 100
+        else:  # SELL
+            pnl = (order.entry_price - current_price) * order.quantity
+            pnl_percent = ((order.entry_price - current_price) / order.entry_price) * 100
+        
+        return {
+            'pnl': pnl,
+            'pnl_percent': pnl_percent,
+            'current_value': abs(current_price * order.quantity),
+            'unrealized_pnl': pnl
+        }
+    
+    def check_tp_sl_conditions(self, order: SimulatedOrder, current_price: float) -> Optional[str]:
+        """Check if TP or SL conditions are met"""
+        if order.order_type == 'BUY':
+            if order.tp_level and current_price >= order.tp_level:
+                return 'TP_HIT'
+            elif order.sl_level and current_price <= order.sl_level:
+                return 'SL_HIT'
+        else:  # SELL
+            if order.tp_level and current_price <= order.tp_level:
+                return 'TP_HIT'
+            elif order.sl_level and current_price >= order.sl_level:
+                return 'SL_HIT'
+        
+        return None
+    
+    def place_order(self, user_id: int, symbol: str, order_type: str, quantity: float, 
+                   tp_level: Optional[float] = None, sl_level: Optional[float] = None) -> Dict:
+        """Place a simulated trading order"""
+        try:
+            # Get current price
+            price_data = self.data_provider.get_current_price(symbol)
+            if price_data.get('error'):
+                return {'success': False, 'message': f"Failed to get price for {symbol}: {price_data.get('error')}"}
+            
+            current_price = price_data['price']
+            if current_price <= 0:
+                return {'success': False, 'message': 'Invalid price data'}
+            
+            # Get user's current balance
+            portfolio = self.get_portfolio(user_id)
+            
+            # Calculate required margin (for now, 1:1 leverage)
+            required_margin = abs(quantity * current_price)
+            
+            # Check if user has sufficient balance
+            if required_margin > portfolio.free_margin:
+                return {
+                    'success': False, 
+                    'message': f'Insufficient balance. Required: ${required_margin:.2f}, Available: ${portfolio.free_margin:.2f}'
+                }
+            
+            # Validate TP/SL levels
+            if order_type == 'BUY':
+                if tp_level and tp_level <= current_price:
+                    return {'success': False, 'message': 'Take Profit must be above current price for BUY orders'}
+                if sl_level and sl_level >= current_price:
+                    return {'success': False, 'message': 'Stop Loss must be below current price for BUY orders'}
+            else:  # SELL
+                if tp_level and tp_level >= current_price:
+                    return {'success': False, 'message': 'Take Profit must be below current price for SELL orders'}
+                if sl_level and sl_level <= current_price:
+                    return {'success': False, 'message': 'Stop Loss must be above current price for SELL orders'}
+            
+            # Create order
+            order_id = str(uuid.uuid4())
+            order = SimulatedOrder(
+                order_id=order_id,
+                user_id=user_id,
+                symbol=symbol,
+                order_type=order_type,
+                quantity=quantity,
+                entry_price=current_price,
+                current_price=current_price,
+                tp_level=tp_level,
+                sl_level=sl_level,
+                status='OPEN',
+                created_at=datetime.now().isoformat()
+            )
+            
+            # Save order to database
+            success = self.db_manager.save_simulated_order(order)
+            if not success:
+                return {'success': False, 'message': 'Failed to save order'}
+            
+            # Update user's cash balance
+            self.db_manager.update_user_balance(user_id, -required_margin)
+            
+            # Create notification
+            self.db_manager.add_notification(
+                user_id,
+                f"Order Placed: {order_type} {symbol}",
+                f"Successfully placed {order_type} order for {quantity} units of {symbol} at ${current_price:.4f}",
+                'order'
+            )
+            
+            logger.info(f"Order placed: {order_type} {quantity} {symbol} at {current_price} for user {user_id}")
+            
+            return {
+                'success': True,
+                'order_id': order_id,
+                'message': f'{order_type} order placed successfully',
+                'order': {
+                    'order_id': order_id,
+                    'symbol': symbol,
+                    'order_type': order_type,
+                    'quantity': quantity,
+                    'entry_price': current_price,
+                    'tp_level': tp_level,
+                    'sl_level': sl_level,
+                    'status': 'OPEN',
+                    'created_at': order.created_at
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error placing order: {e}")
+            return {'success': False, 'message': 'Failed to place order'}
+    
+    def get_portfolio(self, user_id: int) -> Portfolio:
+        """Get user's complete portfolio"""
+        try:
+            # Get user's cash balance
+            cash_balance = self.db_manager.get_user_cash_balance(user_id)
+            
+            # Get open positions
+            open_orders = self.db_manager.get_user_orders(user_id, status='OPEN')
+            
+            total_equity = cash_balance
+            total_pnl = 0.0
+            margin_used = 0.0
+            
+            portfolio_positions = []
+            
+            for order in open_orders:
+                # Get current price for this symbol
+                current_data = self.data_provider.get_current_price(order.symbol)
+                current_price = current_data.get('price', order.entry_price)
+                
+                # Update order's current price
+                order.current_price = current_price
+                
+                # Calculate P&L
+                position_value = self.calculate_position_value(order, current_price)
+                order.pnl = position_value['pnl']
+                order.pnl_percent = position_value['pnl_percent']
+                
+                total_pnl += position_value['pnl']
+                margin_used += abs(order.quantity * order.entry_price)
+                
+                # Check TP/SL conditions
+                close_reason = self.check_tp_sl_conditions(order, current_price)
+                if close_reason:
+                    # Auto-close the position
+                    self.close_order(order.order_id, current_price, close_reason)
+                    continue
+                
+                portfolio_positions.append(order)
+            
+            total_equity = cash_balance + total_pnl
+            free_margin = cash_balance - margin_used
+            total_pnl_percent = (total_pnl / cash_balance * 100) if cash_balance > 0 else 0
+            
+            return Portfolio(
+                user_id=user_id,
+                cash_balance=cash_balance,
+                total_equity=total_equity,
+                open_positions=portfolio_positions,
+                total_pnl=total_pnl,
+                total_pnl_percent=total_pnl_percent,
+                margin_used=margin_used,
+                free_margin=max(0, free_margin)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting portfolio for user {user_id}: {e}")
+            return Portfolio(
+                user_id=user_id,
+                cash_balance=10000.0,  # Default starting balance
+                total_equity=10000.0,
+                open_positions=[],
+                total_pnl=0.0,
+                total_pnl_percent=0.0,
+                margin_used=0.0,
+                free_margin=10000.0
+            )
+    
+    def close_order(self, order_id: str, close_price: float, close_reason: str = 'MANUAL') -> Dict:
+        """Close an open order with transactional logic."""
+        with self.order_close_lock:
+            try:
+                # Re-check order status within the transaction
+                order = self.db_manager.get_order_by_id(order_id)
+                if not order or order.status != 'OPEN':
+                    return {'success': False, 'message': 'Order not found or already closed'}
+
+                # Calculate final P&L
+                position_value = self.calculate_position_value(order, close_price)
+                final_pnl = position_value['pnl']
+
+                # Update order status
+                order.status = 'CLOSED' if close_reason == 'MANUAL' else close_reason
+                order.current_price = close_price
+                order.pnl = final_pnl
+                order.pnl_percent = position_value['pnl_percent']
+                order.closed_at = datetime.now().isoformat()
+                order.close_reason = close_reason
+
+                # Update in database
+                self.db_manager.update_order_status(order)
+
+                # Return margin and add/subtract P&L to user's balance
+                margin_return = abs(order.quantity * order.entry_price)
+                balance_change = margin_return + final_pnl
+                self.db_manager.update_user_balance(order.user_id, balance_change)
+
+                # Create notification
+                pnl_text = f"${final_pnl:.2f}" if final_pnl >= 0 else f"-${abs(final_pnl):.2f}"
+                self.db_manager.add_notification(
+                    order.user_id,
+                    f"Position Closed: {order.symbol}",
+                    f"Closed {order.order_type} position for {order.symbol}. P&L: {pnl_text} ({position_value['pnl_percent']:.2f}%)",
+                    'position_closed'
+                )
+
+                logger.info(f"Order {order_id} closed with P&L: {final_pnl}")
+
+                return {
+                    'success': True,
+                    'message': 'Position closed successfully',
+                    'pnl': final_pnl,
+                    'pnl_percent': position_value['pnl_percent'],
+                    'close_reason': close_reason
+                }
+
+            except Exception as e:
+                logger.error(f"Error closing order {order_id}: {e}")
+                # Potentially roll back transaction here if using a more advanced DB
+                return {'success': False, 'message': 'Failed to close position'}
 
 class NotificationManager:
     """Manages email and in-app notifications for users"""
@@ -940,6 +1307,7 @@ class DatabaseManager:
                 email_notifications BOOLEAN DEFAULT 1,
                 push_notifications BOOLEAN DEFAULT 1,
                 risk_tolerance REAL DEFAULT 0.02,
+                cash_balance REAL DEFAULT 10000.0,
                 created_at TEXT NOT NULL,
                 last_login TEXT,
                 is_active BOOLEAN DEFAULT 1
@@ -1002,6 +1370,54 @@ class DatabaseManager:
             )
         ''')
         
+        # NEW TRADING SIMULATION TABLES
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS simulated_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                order_type TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                entry_price REAL NOT NULL,
+                current_price REAL NOT NULL,
+                tp_level REAL,
+                sl_level REAL,
+                status TEXT NOT NULL DEFAULT 'OPEN',
+                pnl REAL DEFAULT 0.0,
+                pnl_percent REAL DEFAULT 0.0,
+                created_at TEXT NOT NULL,
+                closed_at TEXT,
+                close_reason TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS balance_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                balance_change REAL NOT NULL,
+                new_balance REAL NOT NULL,
+                transaction_type TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Add indexes for better performance
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_user_id ON simulated_orders(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_status ON simulated_orders(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_symbol ON simulated_orders(symbol)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_balance_user_id ON balance_history(user_id)')
+        
+        # Check if cash_balance column exists in users table, add if not
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'cash_balance' not in columns:
+            cursor.execute('ALTER TABLE users ADD COLUMN cash_balance REAL DEFAULT 10000.0')
+        
         conn.commit()
         conn.close()
 
@@ -1020,15 +1436,22 @@ class DatabaseManager:
             created_at = datetime.now().isoformat()
             
             cursor.execute('''
-                INSERT INTO users (username, email, password_hash, first_name, last_name, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (username, email, password_hash, first_name, last_name, created_at))
+                INSERT INTO users (username, email, password_hash, first_name, last_name, cash_balance, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (username, email, password_hash, first_name, last_name, 10000.0, created_at))
             
             user_id = cursor.lastrowid
+            
+            # Log initial balance
+            cursor.execute('''
+                INSERT INTO balance_history (user_id, balance_change, new_balance, transaction_type, description, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (user_id, 10000.0, 10000.0, 'INITIAL_DEPOSIT', 'Account creation - starting balance', created_at))
+            
             conn.commit()
             conn.close()
             
-            logger.info(f"New user created: {username} ({email})")
+            logger.info(f"New user created: {username} ({email}) with starting balance $10,000")
             return {'success': True, 'user_id': user_id, 'message': 'Account created successfully'}
             
         except Exception as e:
@@ -1043,7 +1466,7 @@ class DatabaseManager:
             
             cursor.execute('''
                 SELECT id, username, email, password_hash, first_name, last_name, 
-                       email_notifications, push_notifications, risk_tolerance, is_active
+                       email_notifications, push_notifications, risk_tolerance, cash_balance, is_active
                 FROM users WHERE username = ? OR email = ?
             ''', (username, username))
             
@@ -1051,7 +1474,7 @@ class DatabaseManager:
             if not user:
                 return {'success': False, 'message': 'Invalid username or password'}
             
-            if not user[9]:  # is_active
+            if not user[10]:  # is_active
                 return {'success': False, 'message': 'Account is deactivated'}
             
             if check_password_hash(user[3], password):
@@ -1071,7 +1494,8 @@ class DatabaseManager:
                         'last_name': user[5],
                         'email_notifications': bool(user[6]),
                         'push_notifications': bool(user[7]),
-                        'risk_tolerance': user[8]
+                        'risk_tolerance': user[8],
+                        'cash_balance': user[9]
                     }
                 }
             else:
@@ -1115,7 +1539,7 @@ class DatabaseManager:
             cursor.execute('''
                 SELECT u.id, u.username, u.email, u.first_name, u.last_name,
                        u.email_notifications, u.push_notifications, u.risk_tolerance,
-                       s.expires_at
+                       u.cash_balance, s.expires_at
                 FROM users u
                 JOIN user_sessions s ON u.id = s.user_id
                 WHERE s.session_token = ? AND u.is_active = 1
@@ -1125,7 +1549,7 @@ class DatabaseManager:
             conn.close()
             
             if result:
-                expires_at = datetime.fromisoformat(result[8])
+                expires_at = datetime.fromisoformat(result[9])
                 if expires_at > datetime.now():
                     return {
                         'id': result[0],
@@ -1135,7 +1559,8 @@ class DatabaseManager:
                         'last_name': result[4],
                         'email_notifications': bool(result[5]),
                         'push_notifications': bool(result[6]),
-                        'risk_tolerance': result[7]
+                        'risk_tolerance': result[7],
+                        'cash_balance': result[8]
                     }
             
             return None
@@ -1272,6 +1697,186 @@ class DatabaseManager:
             logger.error(f"Error getting notifications: {e}")
             return []
 
+    # NEW TRADING SIMULATION METHODS
+    
+    def save_simulated_order(self, order: SimulatedOrder) -> bool:
+        """Save a simulated trading order"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO simulated_orders (
+                    order_id, user_id, symbol, order_type, quantity, entry_price,
+                    current_price, tp_level, sl_level, status, pnl, pnl_percent, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                order.order_id, order.user_id, order.symbol, order.order_type,
+                order.quantity, order.entry_price, order.current_price,
+                order.tp_level, order.sl_level, order.status,
+                order.pnl, order.pnl_percent, order.created_at
+            ))
+            
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving simulated order: {e}")
+            return False
+    
+    def get_user_orders(self, user_id: int, status: str = None, limit: int = 100) -> List[SimulatedOrder]:
+        """Get user's trading orders"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            if status:
+                cursor.execute('''
+                    SELECT * FROM simulated_orders 
+                    WHERE user_id = ? AND status = ?
+                    ORDER BY created_at DESC LIMIT ?
+                ''', (user_id, status, limit))
+            else:
+                cursor.execute('''
+                    SELECT * FROM simulated_orders 
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC LIMIT ?
+                ''', (user_id, limit))
+            
+            orders = []
+            for row in cursor.fetchall():
+                order = SimulatedOrder(
+                    order_id=row[1],
+                    user_id=row[2],
+                    symbol=row[3],
+                    order_type=row[4],
+                    quantity=row[5],
+                    entry_price=row[6],
+                    current_price=row[7],
+                    tp_level=row[8],
+                    sl_level=row[9],
+                    status=row[10],
+                    pnl=row[11],
+                    pnl_percent=row[12],
+                    created_at=row[13],
+                    closed_at=row[14],
+                    close_reason=row[15]
+                )
+                orders.append(order)
+            
+            conn.close()
+            return orders
+            
+        except Exception as e:
+            logger.error(f"Error getting user orders: {e}")
+            return []
+    
+    def get_order_by_id(self, order_id: str) -> Optional[SimulatedOrder]:
+        """Get order by ID"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT * FROM simulated_orders WHERE order_id = ?', (order_id,))
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return SimulatedOrder(
+                    order_id=row[1],
+                    user_id=row[2],
+                    symbol=row[3],
+                    order_type=row[4],
+                    quantity=row[5],
+                    entry_price=row[6],
+                    current_price=row[7],
+                    tp_level=row[8],
+                    sl_level=row[9],
+                    status=row[10],
+                    pnl=row[11],
+                    pnl_percent=row[12],
+                    created_at=row[13],
+                    closed_at=row[14],
+                    close_reason=row[15]
+                )
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting order by ID: {e}")
+            return None
+    
+    def update_order_status(self, order: SimulatedOrder) -> bool:
+        """Update order status and details"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE simulated_orders SET
+                    current_price = ?, status = ?, pnl = ?, pnl_percent = ?,
+                    closed_at = ?, close_reason = ?
+                WHERE order_id = ?
+            ''', (
+                order.current_price, order.status, order.pnl, order.pnl_percent,
+                order.closed_at, order.close_reason, order.order_id
+            ))
+            
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating order status: {e}")
+            return False
+    
+    def get_user_cash_balance(self, user_id: int) -> float:
+        """Get user's current cash balance"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT cash_balance FROM users WHERE id = ?', (user_id,))
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result[0] if result else 10000.0
+            
+        except Exception as e:
+            logger.error(f"Error getting user cash balance: {e}")
+            return 10000.0
+    
+    def update_user_balance(self, user_id: int, balance_change: float, transaction_type: str = 'TRADE', description: str = None) -> bool:
+        """Update user's cash balance"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get current balance
+            cursor.execute('SELECT cash_balance FROM users WHERE id = ?', (user_id,))
+            current_balance = cursor.fetchone()[0]
+            
+            # Calculate new balance
+            new_balance = current_balance + balance_change
+            
+            # Update user's balance
+            cursor.execute('UPDATE users SET cash_balance = ? WHERE id = ?', (new_balance, user_id))
+            
+            # Log the transaction
+            cursor.execute('''
+                INSERT INTO balance_history (user_id, balance_change, new_balance, transaction_type, description, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (user_id, balance_change, new_balance, transaction_type, description, datetime.now().isoformat()))
+            
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating user balance: {e}")
+            return False
+
     def save_signal(self, symbol: str, signal: TradingSignal):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1333,9 +1938,12 @@ app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 CORS(app)
 
 # Initialize managers
-data_provider = TwelveDataProvider()
+cache_manager = CacheManager()
+rate_limiter = RateLimiter(max_calls_per_minute=20) # Increased limit
+data_provider = TwelveDataProvider(cache_manager=cache_manager, rate_limiter=rate_limiter)
 db_manager = DatabaseManager()
 notification_manager = NotificationManager()
+trading_simulator = TradingSimulator(db_manager, data_provider)
 trading_systems = {}
 
 # Authentication routes
@@ -1346,7 +1954,7 @@ def register():
         username = data.get('username', '').strip()
         email = data.get('email', '').strip()
         password = data.get('password', '')
-        confirm_password = data.get('confirm_password', '')  # <-- NEW
+        confirm_password = data.get('confirm_password', '')
         first_name = data.get('first_name', '').strip()
         last_name = data.get('last_name', '').strip()
         
@@ -1354,7 +1962,7 @@ def register():
             return jsonify({'error': 'Username, email, and password are required'}), 400
 
         if password != confirm_password:
-            return jsonify({'error': 'Passwords do not match'}), 400  # <-- NEW
+            return jsonify({'error': 'Passwords do not match'}), 400
 
         if len(password) < 6:
             return jsonify({'error': 'Password must be at least 6 characters long'}), 400
@@ -1375,13 +1983,12 @@ def login():
     try:
         data = request.json
         username = data.get('username', '').strip()
-        email = data.get('email', '').strip()
         password = data.get('password', '')
 
-        if not username or not email or not password:
-            return jsonify({'error': 'Username, email, and password are required'}), 400
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
 
-        result = db_manager.authenticate_user(username, email, password)
+        result = db_manager.authenticate_user(username, password)
 
         if result['success']:
             session_token = db_manager.create_session(result['user']['id'])
@@ -1435,6 +2042,224 @@ def get_notifications():
     notifications = db_manager.get_user_notifications(request.user['id'])
     return jsonify({'notifications': notifications})
 
+# NEW TRADING SIMULATION ENDPOINTS
+
+@app.route('/api/order', methods=['POST'])
+@login_required
+def place_order():
+    """Place a simulated buy or sell order"""
+    try:
+        data = request.json
+        symbol = data.get('symbol', '').upper().strip()
+        order_type = data.get('order_type', '').upper()
+        quantity = float(data.get('quantity', 0))
+        tp_level = data.get('tp_level')
+        sl_level = data.get('sl_level')
+        
+        # Validation
+        if not symbol:
+            return jsonify({'error': 'Symbol is required'}), 400
+        
+        if order_type not in ['BUY', 'SELL']:
+            return jsonify({'error': 'Order type must be BUY or SELL'}), 400
+        
+        if quantity <= 0:
+            return jsonify({'error': 'Quantity must be greater than 0'}), 400
+        
+        if tp_level is not None:
+            tp_level = float(tp_level)
+        
+        if sl_level is not None:
+            sl_level = float(sl_level)
+        
+        # Place the order
+        result = trading_simulator.place_order(
+            user_id=request.user['id'],
+            symbol=symbol,
+            order_type=order_type,
+            quantity=quantity,
+            tp_level=tp_level,
+            sl_level=sl_level
+        )
+        
+        if result['success']:
+            return jsonify(result), 201
+        else:
+            return jsonify({'error': result['message']}), 400
+            
+    except ValueError as e:
+        return jsonify({'error': 'Invalid input data'}), 400
+    except Exception as e:
+        logger.error(f"Order placement error: {e}")
+        return jsonify({'error': 'Failed to place order'}), 500
+
+@app.route('/api/orders', methods=['GET'])
+@login_required
+def get_orders():
+    """Get user's order/trade history"""
+    try:
+        status = request.args.get('status')  # OPEN, CLOSED, TP_HIT, SL_HIT
+        limit = int(request.args.get('limit', 50))
+        
+        orders = db_manager.get_user_orders(request.user['id'], status, limit)
+        
+        # Convert orders to JSON-serializable format
+        orders_data = []
+        for order in orders:
+            orders_data.append({
+                'order_id': order.order_id,
+                'symbol': order.symbol,
+                'order_type': order.order_type,
+                'quantity': order.quantity,
+                'entry_price': order.entry_price,
+                'current_price': order.current_price,
+                'tp_level': order.tp_level,
+                'sl_level': order.sl_level,
+                'status': order.status,
+                'pnl': order.pnl,
+                'pnl_percent': order.pnl_percent,
+                'created_at': order.created_at,
+                'closed_at': order.closed_at,
+                'close_reason': order.close_reason
+            })
+        
+        return jsonify({
+            'orders': orders_data,
+            'total_count': len(orders_data)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting orders: {e}")
+        return jsonify({'error': 'Failed to get orders'}), 500
+
+@app.route('/api/portfolio', methods=['GET'])
+@login_required
+def get_portfolio():
+    """Get user's portfolio including open positions and cash balance"""
+    try:
+        portfolio = trading_simulator.get_portfolio(request.user['id'])
+        
+        # Convert to JSON-serializable format
+        portfolio_data = {
+            'user_id': portfolio.user_id,
+            'cash_balance': portfolio.cash_balance,
+            'total_equity': portfolio.total_equity,
+            'total_pnl': portfolio.total_pnl,
+            'total_pnl_percent': portfolio.total_pnl_percent,
+            'margin_used': portfolio.margin_used,
+            'free_margin': portfolio.free_margin,
+            'open_positions': []
+        }
+        
+        for position in portfolio.open_positions:
+            portfolio_data['open_positions'].append({
+                'order_id': position.order_id,
+                'symbol': position.symbol,
+                'order_type': position.order_type,
+                'quantity': position.quantity,
+                'entry_price': position.entry_price,
+                'current_price': position.current_price,
+                'tp_level': position.tp_level,
+                'sl_level': position.sl_level,
+                'pnl': position.pnl,
+                'pnl_percent': position.pnl_percent,
+                'created_at': position.created_at
+            })
+        
+        return jsonify(portfolio_data)
+        
+    except Exception as e:
+        logger.error(f"Error getting portfolio: {e}")
+        return jsonify({'error': 'Failed to get portfolio'}), 500
+
+@app.route('/api/order/<order_id>/close', methods=['POST'])
+@login_required
+def close_order(order_id):
+    """Manually close an open order"""
+    try:
+        # Verify order belongs to user
+        order = db_manager.get_order_by_id(order_id)
+        if not order or order.user_id != request.user['id']:
+            return jsonify({'error': 'Order not found'}), 404
+        
+        if order.status != 'OPEN':
+            return jsonify({'error': 'Order is already closed'}), 400
+        
+        # Get current price
+        price_data = data_provider.get_current_price(order.symbol)
+        if 'error' in price_data:
+            return jsonify({'error': price_data['error']}), 429 # Too Many Requests
+        current_price = price_data.get('price', order.entry_price)
+        
+        # Close the order
+        result = trading_simulator.close_order(order_id, current_price, 'MANUAL')
+        
+        if result['success']:
+            return jsonify(result)
+        else:
+            return jsonify({'error': result['message']}), 400
+            
+    except Exception as e:
+        logger.error(f"Error closing order: {e}")
+        return jsonify({'error': 'Failed to close order'}), 500
+
+@app.route('/api/portfolio/summary', methods=['GET'])
+@login_required
+def get_portfolio_summary():
+    """Get portfolio performance summary"""
+    try:
+        portfolio = trading_simulator.get_portfolio(request.user['id'])
+        
+        # Get closed orders for performance metrics
+        closed_orders = db_manager.get_user_orders(request.user['id'], status='CLOSED', limit=100)
+        tp_hit_orders = db_manager.get_user_orders(request.user['id'], status='TP_HIT', limit=100)
+        sl_hit_orders = db_manager.get_user_orders(request.user['id'], status='SL_HIT', limit=100)
+        
+        all_closed = closed_orders + tp_hit_orders + sl_hit_orders
+        
+        # Calculate performance metrics
+        total_trades = len(all_closed)
+        winning_trades = len([o for o in all_closed if o.pnl > 0])
+        losing_trades = len([o for o in all_closed if o.pnl < 0])
+        
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        
+        total_profit = sum([o.pnl for o in all_closed if o.pnl > 0])
+        total_loss = sum([o.pnl for o in all_closed if o.pnl < 0])
+        
+        profit_factor = abs(total_profit / total_loss) if total_loss != 0 else float('inf')
+        
+        avg_win = total_profit / winning_trades if winning_trades > 0 else 0
+        avg_loss = total_loss / losing_trades if losing_trades > 0 else 0
+        
+        summary = {
+            'portfolio': {
+                'cash_balance': portfolio.cash_balance,
+                'total_equity': portfolio.total_equity,
+                'total_pnl': portfolio.total_pnl,
+                'total_pnl_percent': portfolio.total_pnl_percent,
+                'free_margin': portfolio.free_margin,
+                'open_positions_count': len(portfolio.open_positions)
+            },
+            'performance': {
+                'total_trades': total_trades,
+                'winning_trades': winning_trades,
+                'losing_trades': losing_trades,
+                'win_rate': win_rate,
+                'profit_factor': profit_factor,
+                'total_profit': total_profit,
+                'total_loss': total_loss,
+                'avg_win': avg_win,
+                'avg_loss': avg_loss
+            }
+        }
+        
+        return jsonify(summary)
+        
+    except Exception as e:
+        logger.error(f"Error getting portfolio summary: {e}")
+        return jsonify({'error': 'Failed to get portfolio summary'}), 500
+
 # Enhanced analysis endpoint
 @app.route('/api/analyze_enhanced', methods=['POST'])
 @login_required
@@ -1457,6 +2282,9 @@ def analyze_enhanced():
         
         # Get data
         current_data = data_provider.get_current_price(symbol)
+        if 'error' in current_data:
+            return jsonify({'error': current_data['error']}), 429
+            
         historical_prices = data_provider.get_historical_data(symbol, 100)
         
         if len(historical_prices) < 50:
@@ -1464,7 +2292,7 @@ def analyze_enhanced():
         
         # Analyze with enhanced system
         price_array = np.array([to_scalar(x) for x in historical_prices])
-        enhanced_signal = trading_system.analyze_enhanced(price_array)
+        enhanced_signal = trading_system.analyze_enhanced(price_array, risk_tolerance)
         
         # Save signal
         db_manager.save_enhanced_signal(symbol, enhanced_signal, request.user['id'])
@@ -1563,6 +2391,9 @@ def analyze_symbol():
         trading_system = trading_systems[system_key]
         
         current_data = data_provider.get_current_price(symbol)
+        if 'error' in current_data:
+            return jsonify({'error': current_data['error']}), 429
+            
         historical_prices = data_provider.get_historical_data(symbol, config.DEFAULT_HISTORICAL_DAYS)
         
         if len(historical_prices) < config.MIN_DATA_POINTS:
@@ -1592,6 +2423,8 @@ def analyze_symbol():
 def get_price(symbol):
     try:
         price_data = data_provider.get_current_price(symbol)
+        if 'error' in price_data:
+            return jsonify(price_data), 429
         db_manager.save_price_data(price_data)
         return jsonify(price_data)
     except Exception as e:
@@ -1604,6 +2437,8 @@ def get_historical(symbol):
         days = int(request.args.get('days', config.DEFAULT_HISTORICAL_DAYS))
         days = min(days, config.MAX_HISTORICAL_DAYS)
         historical_data = data_provider.get_historical_data(symbol, days)
+        if not historical_data:
+            return jsonify({'error': 'Rate limit exceeded or no data available'}), 429
         return jsonify({
             'symbol': symbol,
             'data': [to_scalar(x) for x in historical_data],
@@ -1666,8 +2501,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'version': '3.0.0',
-        'features': ['authentication', 'notifications', 'enhanced_signals', 'kelly_sizing'],
+        'version': '4.0.0',
+        'features': ['authentication', 'notifications', 'enhanced_signals', 'kelly_sizing', 'trading_simulation', 'caching', 'rate_limiting'],
         'data_provider': 'Twelve Data'
     })
 
@@ -1685,8 +2520,11 @@ def background_updater():
             for symbol in symbols:
                 try:
                     price_data = data_provider.get_current_price(symbol)
-                    db_manager.save_price_data(price_data)
-                    logger.info(f"Updated price for {symbol}: {price_data['price']}")
+                    if 'error' not in price_data:
+                        db_manager.save_price_data(price_data)
+                        logger.info(f"Updated price for {symbol}: {price_data['price']}")
+                    else:
+                        logger.warning(f"Could not update price for {symbol}: {price_data.get('error')}")
                     time.sleep(2)
                 except Exception as e:
                     logger.error(f"Error updating {symbol}: {e}")
@@ -1726,7 +2564,8 @@ def background_updater():
                             
                             trading_system = trading_systems[system_key]
                             price_array = np.array([to_scalar(x) for x in historical_prices])
-                            enhanced_signal = trading_system.analyze_enhanced(price_array)
+                            # Use a default risk tolerance for background checks
+                            enhanced_signal = trading_system.analyze_enhanced(price_array, 0.02)
                             
                             # If high confidence signal, notify users
                             if enhanced_signal.confidence > 75 and enhanced_signal.signal != 'HOLD':
@@ -1763,6 +2602,18 @@ def background_updater():
                 except Exception as e:
                     logger.error(f"Error processing watchlisted symbol {symbol}: {e}")
                     continue
+            
+            # Check and auto-close positions based on TP/SL
+            try:
+                cursor.execute('SELECT DISTINCT user_id FROM simulated_orders WHERE status = "OPEN"')
+                active_users = [row[0] for row in cursor.fetchall()]
+                
+                for user_id in active_users:
+                    portfolio = trading_simulator.get_portfolio(user_id)
+                    # The get_portfolio method already handles TP/SL checking
+                    
+            except Exception as e:
+                logger.error(f"Error checking TP/SL conditions: {e}")
             
             conn.close()
             
