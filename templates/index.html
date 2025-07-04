@@ -663,7 +663,7 @@
             const password = document.getElementById('loginPassword').value;
 
             try {
-                const response = await apiCall('/api/login', 'POST', { email, password });
+                const response = await apiCall('https://fx-gx7y.onrender.com/api/login', 'POST', { email, password });
                 
                 if (response.ok) {
                     const data = await response.json();
@@ -684,30 +684,30 @@
         document.getElementById('registerForm').addEventListener('submit', async function(e) {
             e.preventDefault();
     const username = document.getElementById('registerUsername').value;
-    const firstName = document.getElementById('firstName').value;
-    const lastName = document.getElementById('lastName').value;
+    const first_Name = document.getElementById('first_Name').value;
+    const last_Name = document.getElementById('last_Name').value;
     const email = document.getElementById('registerEmail').value;
     const password = document.getElementById('registerPassword').value;
-    const confirmPassword = document.getElementById('confirmPassword').value;
+    const confirm_Password = document.getElementById('confirm_Password').value;
 
 });
-            if (password !== confirmPassword) {
+            if (password !== confirm_Password) {
                 alert('Passwords do not match!');
                 return;
             }
 
             try {
-                const response = await apiCall('/api/register', 'POST', {
-                    firstName,
-                    lastName,
+                const response = await apiCall('https://fx-gx7y.onrender.com/api/register', 'POST', {
+                    first_Name,
+                    last_Name,
                     email,
                     password,
-                    confirmPassword
+                    confirm_Password
                 });
 
                 if (response.ok) {
                     const data = await response.json();
-                    currentUser = data.user || { email, firstName, lastName };
+                    currentUser = data.user || { username, email, first_Name, last_Name };
                     authToken = data.token;
                     showDashboard();
                     hideModal('registerModal');
