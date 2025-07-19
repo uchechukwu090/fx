@@ -166,6 +166,10 @@ class EnhancedTradingSignal:
     dynamic_sl_level: PredictionLevel
     
     timestamp: str = ""
+    
+    # --- NEWLY ADDED FIELDS ---
+    estimated_entry_price: float = 0.0
+    estimated_time_to_target: float = 0.0
 
 @dataclass
 class SimulatedOrder:
@@ -609,8 +613,41 @@ class EnhancedBayesianInference:
         self.predictive_engine = PredictiveEngine()
         self.kelly_calculator = KellyCriterionCalculator(risk_tolerance)
         self.prior_bull = 0.5
+
+    # --- NEWLY ADDED UTILITY FUNCTIONS ---
+    def estimate_time_to_target(self, predictions: List[PredictionLevel]) -> float:
+        """Weighted estimate of time to target in hours."""
+        if not predictions:
+            return 0.0
+        
+        weighted_time = sum(p.time_to_target_hours * p.probability for p in predictions)
+        total_probability = sum(p.probability for p in predictions)
+        
+        return weighted_time / total_probability if total_probability > 0 else 0.0
+
+    def estimate_entry_price(self, trend_data: np.array, signal: str, current_price: float) -> float:
+        """Estimate optimal entry price based on recent trend movement."""
+        if len(trend_data) < 10:
+            return current_price
+
+        # Use a small percentage of the price as a buffer for entry
+        volatility_adjustment = current_price * 0.002  # ~0.2% entry buffer
+
+        if signal == 'BUY':
+            # Target the 25th percentile of the recent trend as a potential dip
+            dip_zone = np.percentile(trend_data[-10:], 25)
+            # Ensure the entry is not drastically far from the current price
+            return max(dip_zone - volatility_adjustment, current_price * 0.99)
+        elif signal == 'SELL':
+            # Target the 75th percentile of the recent trend as a potential spike
+            spike_zone = np.percentile(trend_data[-10:], 75)
+            # Ensure the entry is not drastically far from the current price
+            return min(spike_zone + volatility_adjustment, current_price * 1.01)
+        
+        return current_price
     
-    def generate_enhanced_signal(self, kalman_states: Dict, current_price: float, user_risk_tolerance: float) -> EnhancedTradingSignal:
+    # --- MODIFIED METHOD SIGNATURE ---
+    def generate_enhanced_signal(self, kalman_states: Dict, current_price: float, user_risk_tolerance: float, wavelet_components: Dict) -> EnhancedTradingSignal:
         """Generate enhanced trading signal with predictions and Kelly sizing"""
         
         # Generate timeframe predictions
@@ -672,7 +709,8 @@ class EnhancedBayesianInference:
             dynamic_tp_levels, current_price, sl_price, user_risk_tolerance
         )
         
-        return EnhancedTradingSignal(
+        # Create the initial signal object
+        enhanced_signal = EnhancedTradingSignal(
             signal=signal,
             confidence=confidence,
             entry_price=current_price,
@@ -683,6 +721,16 @@ class EnhancedBayesianInference:
             dynamic_sl_level=dynamic_sl_level,
             timestamp=datetime.now().isoformat()
         )
+        
+        # --- INJECT NEW ESTIMATIONS ---
+        enhanced_signal.estimated_time_to_target = self.estimate_time_to_target(dynamic_tp_levels)
+        enhanced_signal.estimated_entry_price = self.estimate_entry_price(
+            trend_data=wavelet_components.get("trend", np.array([])),
+            signal=signal,
+            current_price=current_price
+        )
+        
+        return enhanced_signal
 
 class AdvancedTradingSystem:
     def __init__(self, wavelet_type=None, process_noise=None, measurement_noise=None, risk_tolerance=None):
@@ -725,8 +773,14 @@ class AdvancedTradingSystem:
         
         current_price = to_scalar(price_data[-1])
         
-        # Generate enhanced signal
-        enhanced_signal = self.enhanced_bayesian.generate_enhanced_signal(kalman_states, current_price, user_risk_tolerance)
+        # --- MODIFIED METHOD CALL ---
+        # Generate enhanced signal, passing wavelet_components
+        enhanced_signal = self.enhanced_bayesian.generate_enhanced_signal(
+            kalman_states, 
+            current_price, 
+            user_risk_tolerance,
+            wavelet_components
+        )
         
         return enhanced_signal
 
@@ -2337,10 +2391,13 @@ def analyze_enhanced():
                 'reliability_score': tf_pred.reliability_score
             }
         
+        # --- MODIFIED RESPONSE DICTIONARY ---
         response = {
             'signal': enhanced_signal.signal,
             'confidence': enhanced_signal.confidence,
             'entry_price': enhanced_signal.entry_price,
+            'estimated_entry_price': enhanced_signal.estimated_entry_price,
+            'estimated_time_to_target': enhanced_signal.estimated_time_to_target,
             
             'kelly_positioning': {
                 'optimal_position_size': enhanced_signal.kelly_positioning.optimal_position_size,
@@ -2501,8 +2558,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'version': '4.0.0',
-        'features': ['authentication', 'notifications', 'enhanced_signals', 'kelly_sizing', 'trading_simulation', 'caching', 'rate_limiting'],
+        'version': '4.1.0', # Version incremented
+        'features': ['authentication', 'notifications', 'enhanced_signals', 'kelly_sizing', 'trading_simulation', 'caching', 'rate_limiting', 'time_prediction'],
         'data_provider': 'Twelve Data'
     })
 
